@@ -27,24 +27,34 @@ export function isAllowedCorsOrigin(origin?: string) {
   }
   try {
     const { protocol, hostname } = new URL(normalized);
-    return protocol === 'https:' && hostname === 'constriq.vercel.app';
+    if (protocol !== 'https:') {
+      return false;
+    }
+    return hostname === 'constriq.vercel.app' || /^constriq[-.].+\.vercel\.app$/.test(hostname);
   } catch {
     return false;
   }
 }
 
+function applyCorsHeaders(req: Request, res: Response, origin: string) {
+  const requested = req.headers['access-control-request-headers'];
+  res.header('Access-Control-Allow-Origin', origin);
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+  res.header(
+    'Access-Control-Allow-Headers',
+    typeof requested === 'string' && requested.trim()
+      ? requested
+      : 'Content-Type, Authorization, Accept, Origin, X-Requested-With, sentry-trace, baggage',
+  );
+  res.header('Access-Control-Max-Age', '86400');
+  res.header('Vary', 'Origin, Access-Control-Request-Headers');
+}
+
 export function corsPreflightMiddleware(req: Request, res: Response, next: NextFunction) {
   const origin = req.headers.origin;
   if (typeof origin === 'string' && isAllowedCorsOrigin(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-    res.header(
-      'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, Accept, Origin, X-Requested-With',
-    );
-    res.header('Access-Control-Max-Age', '86400');
-    res.header('Vary', 'Origin');
+    applyCorsHeaders(req, res, origin);
   }
   if (req.method === 'OPTIONS') {
     res.status(204).end();

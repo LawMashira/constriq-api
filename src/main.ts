@@ -3,7 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-import { corsOriginList, corsPreflightMiddleware } from './common/cors';
+import { corsPreflightMiddleware, isAllowedCorsOrigin } from './common/cors';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -19,10 +19,15 @@ async function bootstrap() {
     }),
   );
   app.enableCors({
-    origin: corsOriginList(),
+    origin: (origin, callback) => {
+      if (!origin || isAllowedCorsOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
     optionsSuccessStatus: 204,
   });
   app.useGlobalPipes(
