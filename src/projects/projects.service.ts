@@ -148,7 +148,7 @@ export class ProjectsService {
     }
     const snapshot = await this.profit.compute(companyId, id);
     const originalContractValue = snapshot.originalContractValue;
-    const expectedMargin = percentRatio(snapshot.expectedProfit, snapshot.expectedRevenue);
+    const expectedMargin = percentRatio(snapshot.expectedProfit, snapshot.originalContractValue);
     return {
       ...project,
       usesBoq: project.usesBoq || project.boqs.length > 0,
