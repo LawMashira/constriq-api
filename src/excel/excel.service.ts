@@ -270,25 +270,35 @@ export class ExcelService {
 
   async exportProject(companyId: string, projectId: string) {
     await this.projects.get(companyId, projectId);
-    const [costs, variations, claims, commitments, health] = await Promise.all([
+    const [costs, variations, claims, commitments, snapshot] = await Promise.all([
       this.prisma.actualCost.findMany({ where: { companyId, projectId } }),
       this.prisma.variation.findMany({ where: { companyId, projectId } }),
       this.prisma.progressClaim.findMany({ where: { companyId, projectId } }),
       this.prisma.commitment.findMany({ where: { companyId, projectId } }),
-      this.prisma.projectHealth.findUnique({ where: { projectId } }),
+      this.profit.compute(companyId, projectId),
     ]);
     const ExcelJS = await import('exceljs');
     const workbook = new ExcelJS.Workbook();
     const profit = workbook.addWorksheet('Profit');
     profit.addRow(['Metric', 'Amount']);
-    if (health) {
-      profit.addRow(['Expected revenue', health.expectedRevenue.toFixed(2)]);
-      profit.addRow(['Expected profit', health.expectedProfit.toFixed(2)]);
-      profit.addRow(['Forecast profit', health.forecastProfit.toFixed(2)]);
-      profit.addRow(['Profit at risk', health.profitAtRisk.toFixed(2)]);
-      profit.addRow(['Actual cost', health.actualCost.toFixed(2)]);
-      profit.addRow(['Open commitment', health.committedCost.toFixed(2)]);
-    }
+    profit.addRow(['Original contract value', snapshot.originalContractValue.toFixed(2)]);
+    profit.addRow(['Current approved contract value', snapshot.expectedRevenue.toFixed(2)]);
+    profit.addRow(['Approved variations', snapshot.qualifyingVariationRevenue.toFixed(2)]);
+    profit.addRow(['Pending variations', snapshot.unapprovedVariationExposure.toFixed(2)]);
+    profit.addRow(['Original expected costs', snapshot.originalBudget.toFixed(2)]);
+    profit.addRow(['Current approved budget', snapshot.currentBudget.toFixed(2)]);
+    profit.addRow(['Actual costs', snapshot.actualCost.toFixed(2)]);
+    profit.addRow(['Outstanding commitments', snapshot.openCommittedCost.toFixed(2)]);
+    profit.addRow([
+      'Forecast final costs',
+      snapshot.costEstimateIncomplete ? 'Not yet estimated' : snapshot.forecastFinalCost.toFixed(2),
+    ]);
+    profit.addRow(['Original expected profit', snapshot.originalExpectedProfit.toFixed(2)]);
+    profit.addRow([
+      'Current forecast profit',
+      snapshot.costEstimateIncomplete ? 'Uncertain' : snapshot.forecastProfit.toFixed(2),
+    ]);
+    profit.addRow(['Profit at risk', snapshot.profitAtRisk.toFixed(2)]);
     const costSheet = workbook.addWorksheet('Costs');
     costSheet.addRow(['Date', 'Description', 'Amount', 'Unallocated']);
     for (const item of costs) {

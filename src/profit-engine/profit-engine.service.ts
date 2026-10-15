@@ -44,7 +44,14 @@ export class ProfitEngineService {
     const payload = {
       companyId,
       state,
-      explanation: reasons.map((item) => item.title).join('; ') || 'No material threats',
+      explanation: [
+        snapshot.costEstimateIncomplete
+          ? 'Cost estimate incomplete; forecast final cost is uncertain and unknown costs are not assumed to be zero'
+          : null,
+        reasons.map((item) => item.title).join('; ') || null,
+      ]
+        .filter(Boolean)
+        .join('; ') || 'No material threats',
       expectedRevenue: snapshot.expectedRevenue,
       originalBudget: snapshot.originalBudget,
       currentBudget: snapshot.currentBudget,
@@ -55,8 +62,8 @@ export class ProfitEngineService {
       expectedProfit: snapshot.expectedProfit,
       forecastProfit: snapshot.forecastProfit,
       profitAtRisk: snapshot.profitAtRisk,
-      originalMargin: percentField(marginOrZero(snapshot.expectedProfit, snapshot.expectedRevenue)),
-      expectedMargin: percentField(marginOrZero(snapshot.expectedProfit, snapshot.expectedRevenue)),
+      originalMargin: percentField(marginOrZero(snapshot.expectedProfit, snapshot.originalContractValue)),
+      expectedMargin: percentField(marginOrZero(snapshot.expectedProfit, snapshot.originalContractValue)),
       forecastMargin: percentField(snapshot.forecastMargin ?? zero()),
       currentMargin: percentField(marginOrZero(snapshot.forecastProfit, snapshot.expectedRevenue)),
       marginDeterioration: percentField(
@@ -120,13 +127,14 @@ export class ProfitEngineService {
   }
 
   async compute(companyId: string, projectId: string) {
-    const [contracts, variations, budget, postings, costCodes, unallocated, submittedVars, certifications, payments] =
+    const [contracts, variations, budget, postings, costCodes, unallocated, submittedVars, project, certifications, payments] =
       await Promise.all([
         this.prisma.contract.findMany({ where: { projectId, companyId } }),
         this.prisma.revenuePosting.findMany({
           where: {
             projectId,
             companyId,
+            isReversed: false,
             postingType: {
               in: [RevenuePostingType.APPROVED_VARIATION, RevenuePostingType.EXECUTED_VARIATION],
             },
@@ -147,6 +155,10 @@ export class ProfitEngineService {
         this.prisma.variation.aggregate({
           where: { projectId, companyId, status: { in: ['DRAFT', 'SUBMITTED'] } },
           _sum: { sellingPrice: true },
+        }),
+        this.prisma.project.findFirst({
+          where: { id: projectId, companyId },
+          select: { usesBoq: true },
         }),
         this.prisma.certification.aggregate({
           where: { projectId },
@@ -185,12 +197,20 @@ export class ProfitEngineService {
       certifiedRevenue: certifications._sum.certifiedAmount ?? zero(),
       cashReceived: payments._sum.amount ?? zero(),
     });
+    const hasCostBaseline = Boolean(budget && money(budget.originalAmount).gt(0));
+    const hasLiveCosts =
+      profit.actualCost.gt(0) || profit.openCommittedCost.gt(0) || profit.forecastUncommittedCost.gt(0);
+    const costEstimateIncomplete = !hasCostBaseline && !hasLiveCosts;
 
     return {
       ...profit,
+      originalContractValue,
+      currentApprovedContractValue: profit.expectedRevenue,
       qualifyingVariationRevenue,
       unallocatedCost: money(unallocated._sum.amount ?? 0),
       unapprovedVariationExposure: money(submittedVars._sum.sellingPrice ?? 0),
+      costEstimateIncomplete,
+      usesBoq: project?.usesBoq ?? false,
       contributors: this.contributors(postings, profit.profitAtRisk),
       costDrivers: explainCostOverruns({
         profitAtRisk: profit.profitAtRisk,

@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { VariationStatus } from '@prisma/client';
-import { IsEnum } from 'class-validator';
+import { IsIn } from 'class-validator';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -8,8 +8,8 @@ import { CreateVariationDto } from './dto/create-variation.dto';
 import { VariationsService } from './variations.service';
 
 class TransitionVariationDto {
-  @IsEnum(VariationStatus)
-  status: VariationStatus;
+  @IsIn([...Object.values(VariationStatus), 'WITHDRAWN'])
+  status: VariationStatus | 'WITHDRAWN';
 }
 
 @Controller('projects/:projectId/variations')
@@ -45,7 +45,7 @@ export class VariationsController {
       user.permissions,
       projectId,
       variationId,
-      dto.status,
+      dto.status === 'WITHDRAWN' ? VariationStatus.CANCELLED : dto.status,
     );
   }
 }

@@ -33,6 +33,8 @@ export class ProfitEngineController {
     const result = await this.profit.recalculate(user.companyId, projectId);
     return {
       status: result.status,
+      usesBoq: result.usesBoq,
+      costEstimateIncomplete: result.costEstimateIncomplete,
       reasons: result.reasons.map((item) => ({
         type: item.type,
         amount: jsonMoney(item.amount),
@@ -63,21 +65,30 @@ export class ProfitEngineController {
 
 function serializeProfit(result: Awaited<ReturnType<ProfitEngineService['recalculate']>>) {
   return {
+    usesBoq: result.usesBoq,
+    costEstimateIncomplete: result.costEstimateIncomplete,
+    originalContractValue: jsonMoney(result.originalContractValue),
+    currentApprovedContractValue: jsonMoney(result.currentApprovedContractValue),
     expectedRevenue: jsonMoney(result.expectedRevenue),
     expectedProfit: jsonMoney(result.expectedProfit),
+    originalExpectedProfit: jsonMoney(result.originalExpectedProfit),
     forecastFinalCost: jsonMoney(result.forecastFinalCost),
     forecastProfit: jsonMoney(result.forecastProfit),
+    currentForecastProfit: jsonMoney(result.forecastProfit),
     profitAtRisk: jsonMoney(result.profitAtRisk),
     forecastMargin: result.forecastMargin ? result.forecastMargin.toFixed(4) : null,
     originalBudget: jsonMoney(result.originalBudget),
+    originalExpectedCosts: jsonMoney(result.originalBudget),
     currentBudget: jsonMoney(result.currentBudget),
     actualCost: jsonMoney(result.actualCost),
     openCommittedCost: jsonMoney(result.openCommittedCost),
+    outstandingCommitments: jsonMoney(result.openCommittedCost),
     forecastUncommittedCost: jsonMoney(result.forecastUncommittedCost),
     certifiedRevenue: jsonMoney(result.certifiedRevenue),
     paidRevenue: jsonMoney(result.cashReceived),
     outstandingRevenue: jsonMoney(result.certifiedRevenue.minus(result.cashReceived)),
     approvedVariations: jsonMoney(result.qualifyingVariationRevenue),
+    pendingVariations: jsonMoney(result.unapprovedVariationExposure),
     unapprovedVariationExposure: jsonMoney(result.unapprovedVariationExposure),
     unallocatedCost: jsonMoney(result.unallocatedCost),
     contributors: result.contributors.map((item) => ({

@@ -92,6 +92,10 @@ async function applyBoq(tx: Prisma.TransactionClient, rows: MappedRow[], context
     context,
     created.items.map((item, index) => ({ ...item, costAmount: costAmounts[index] ?? item.amount })),
   );
+  await tx.project.update({
+    where: { id: context.projectId },
+    data: { usesBoq: true },
+  });
   return { created: items.length };
 }
 

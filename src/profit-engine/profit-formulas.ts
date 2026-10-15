@@ -14,7 +14,9 @@ export type ProfitInputs = {
 };
 
 export type ProfitResult = {
+  originalContractValue: Prisma.Decimal;
   expectedRevenue: Prisma.Decimal;
+  originalExpectedProfit: Prisma.Decimal;
   expectedProfit: Prisma.Decimal;
   forecastFinalCost: Prisma.Decimal;
   forecastProfit: Prisma.Decimal;
@@ -30,21 +32,22 @@ export type ProfitResult = {
 };
 
 export function calculateProfit(input: ProfitInputs): ProfitResult {
-  const expectedRevenue = money(input.originalContractValue).plus(
-    money(input.qualifyingVariationRevenue),
-  );
+  const originalContractValue = money(input.originalContractValue);
+  const expectedRevenue = originalContractValue.plus(money(input.qualifyingVariationRevenue));
   const originalBudget = money(input.originalCostBudget);
-  const expectedProfit = subtract(expectedRevenue, originalBudget);
+  const originalExpectedProfit = subtract(originalContractValue, originalBudget);
   const actualCost = money(input.actualCost);
   const openCommittedCost = money(input.openCommittedCost);
   const forecastUncommittedCost = money(input.forecastUncommittedCost);
   const forecastFinalCost = actualCost.plus(openCommittedCost).plus(forecastUncommittedCost);
   const forecastProfit = subtract(expectedRevenue, forecastFinalCost);
-  const profitAtRisk = subtract(expectedProfit, forecastProfit);
+  const profitAtRisk = subtract(originalExpectedProfit, forecastProfit);
 
   return {
+    originalContractValue,
     expectedRevenue,
-    expectedProfit,
+    originalExpectedProfit,
+    expectedProfit: originalExpectedProfit,
     forecastFinalCost,
     forecastProfit,
     profitAtRisk,
@@ -63,7 +66,13 @@ export function variationQualifiesForRevenue(
   status: string,
   rule: 'APPROVED' | 'EXECUTED',
 ): boolean {
-  if (status === 'SUBMITTED' || status === 'DRAFT' || status === 'REJECTED' || status === 'CANCELLED') {
+  if (
+    status === 'SUBMITTED' ||
+    status === 'DRAFT' ||
+    status === 'REJECTED' ||
+    status === 'CANCELLED' ||
+    status === 'WITHDRAWN'
+  ) {
     return false;
   }
   if (rule === 'APPROVED') {

@@ -8,8 +8,9 @@ import {
   VariationStatus,
 } from '@prisma/client';
 import { AuditService } from '../common/audit.service';
-import { money, percentRatio, subtract } from '../common/money';
+import { money, percentRatio, subtract, zero } from '../common/money';
 import { ProjectAccessService } from '../common/project-access.service';
+import { SequenceService } from '../common/sequence.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProfitEngineService } from '../profit-engine/profit-engine.service';
 import { variationQualifiesForRevenue } from '../profit-engine/profit-formulas';
@@ -21,8 +22,13 @@ const TRANSITIONS: Record<string, VariationStatus[]> = {
     VariationStatus.APPROVED,
     VariationStatus.REJECTED,
     VariationStatus.DRAFT,
+    VariationStatus.CANCELLED,
   ],
-  [VariationStatus.APPROVED]: [VariationStatus.EXECUTED, VariationStatus.REJECTED],
+  [VariationStatus.APPROVED]: [
+    VariationStatus.EXECUTED,
+    VariationStatus.REJECTED,
+    VariationStatus.CANCELLED,
+  ],
   [VariationStatus.EXECUTED]: [],
   [VariationStatus.REJECTED]: [],
   [VariationStatus.CANCELLED]: [],
@@ -35,6 +41,7 @@ export class VariationsService {
     private readonly projects: ProjectAccessService,
     private readonly audit: AuditService,
     private readonly profit: ProfitEngineService,
+    private readonly sequences: SequenceService,
   ) {}
 
   async list(companyId: string, projectId: string) {
@@ -51,12 +58,14 @@ export class VariationsService {
     const sellingPrice = money(dto.sellingPrice);
     const expectedProfit = subtract(sellingPrice, contractorCost);
     const expectedMargin = percentRatio(expectedProfit, sellingPrice) ?? money(0);
+    const variationNo =
+      dto.variationNo ?? (await this.sequences.next(companyId, EntityType.VARIATION, this.prisma));
 
     const variation = await this.prisma.variation.create({
       data: {
         companyId,
         projectId,
-        variationNo: dto.variationNo,
+        variationNo,
         title: dto.title,
         description: dto.description,
         reason: dto.reason,
@@ -78,7 +87,7 @@ export class VariationsService {
       entityType: EntityType.VARIATION,
       entityId: variation.id,
       description: `VO ${variation.variationNo} drafted; not revenue`,
-      newData: { projectId },
+      newData: { projectId, sellingPrice: sellingPrice.toFixed(2), contractorCost: contractorCost.toFixed(2) },
     });
     return variation;
   }
@@ -91,7 +100,6 @@ export class VariationsService {
     variationId: string,
     next: VariationStatus,
   ) {
-    assertVariationTransitionPermission(permissions, next);
     await this.projects.getWritable(companyId, projectId);
     const variation = await this.prisma.variation.findFirst({
       where: { id: variationId, projectId, companyId },
@@ -99,6 +107,7 @@ export class VariationsService {
     if (!variation) {
       throw new BadRequestException('Variation not found');
     }
+    assertVariationTransitionPermission(permissions, variation.status, next);
     if (!TRANSITIONS[variation.status]?.includes(next)) {
       throw new BadRequestException(`Cannot move variation from ${variation.status} to ${next}`);
     }
@@ -129,10 +138,30 @@ export class VariationsService {
           variation: updated,
           rule,
         });
-        const revenue = await this.sumQualifying(tx, projectId);
-        await tx.contract.update({
-          where: { id: contract.id },
-          data: { revisedValue: money(contract.originalValue).plus(revenue) },
+      } else {
+        await tx.revenuePosting.updateMany({
+          where: { variationId: variation.id, isReversed: false },
+          data: { isReversed: true },
+        });
+      }
+
+      const revenue = await this.sumQualifying(tx, projectId);
+      const previousApproved = money(contract.revisedValue);
+      const nextApproved = money(contract.originalValue).plus(revenue);
+      await tx.contract.update({
+        where: { id: contract.id },
+        data: { revisedValue: nextApproved },
+      });
+      if (!previousApproved.eq(nextApproved)) {
+        await tx.contractRevision.create({
+          data: {
+            projectId,
+            contractId: contract.id,
+            previousValue: previousApproved,
+            newValue: nextApproved,
+            reason: `VO ${variation.variationNo} ${variation.status} → ${next}`,
+            createdById: userId,
+          },
         });
       }
 
@@ -145,7 +174,20 @@ export class VariationsService {
           entityType: EntityType.VARIATION,
           entityId: variation.id,
           description: `VO ${variation.variationNo} ${variation.status} → ${next}`,
-          newData: { projectId },
+          reason: variation.reason ?? undefined,
+          oldData: {
+            status: variation.status,
+            originalContractValue: contract.originalValue.toFixed(2),
+            currentApprovedContractValue: previousApproved.toFixed(2),
+          },
+          newData: {
+            projectId,
+            status: next,
+            originalContractValue: contract.originalValue.toFixed(2),
+            currentApprovedContractValue: nextApproved.toFixed(2),
+            sellingPrice: variation.sellingPrice.toFixed(2),
+            contractorCost: variation.contractorCost.toFixed(2),
+          },
         },
         tx,
       );
@@ -180,8 +222,9 @@ export class VariationsService {
         postingType,
         amount: input.variation.sellingPrice,
         postingDate: new Date(),
+        isReversed: false,
       },
-      update: { amount: input.variation.sellingPrice },
+      update: { amount: input.variation.sellingPrice, isReversed: false },
     });
   }
 
@@ -189,24 +232,28 @@ export class VariationsService {
     const rows = await tx.revenuePosting.findMany({
       where: {
         projectId,
+        isReversed: false,
         postingType: {
           in: [RevenuePostingType.APPROVED_VARIATION, RevenuePostingType.EXECUTED_VARIATION],
         },
       },
     });
-    return rows.reduce((total, row) => total.plus(row.amount), money(0));
+    return rows.reduce((total, row) => total.plus(row.amount), zero());
   }
 }
 
-const COMMERCIAL_VARIATION_STATUSES: VariationStatus[] = [
-  VariationStatus.APPROVED,
-  VariationStatus.REJECTED,
-  VariationStatus.EXECUTED,
-];
-
-function assertVariationTransitionPermission(permissions: string[], next: VariationStatus) {
+function assertVariationTransitionPermission(
+  permissions: string[],
+  from: VariationStatus,
+  next: VariationStatus,
+) {
   const granted = new Set(permissions);
-  if (COMMERCIAL_VARIATION_STATUSES.includes(next)) {
+  const commercial =
+    next === VariationStatus.APPROVED ||
+    next === VariationStatus.REJECTED ||
+    next === VariationStatus.EXECUTED ||
+    (next === VariationStatus.CANCELLED && from === VariationStatus.APPROVED);
+  if (commercial) {
     if (!granted.has('variation.approve')) {
       throw new ForbiddenException('Insufficient permissions');
     }

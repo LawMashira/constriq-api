@@ -2,8 +2,9 @@ import { IsDateString, IsOptional, IsString } from 'class-validator';
 import { IsMoney } from '../../common/dto/money-field';
 
 export class CreateVariationDto {
+  @IsOptional()
   @IsString()
-  variationNo: string;
+  variationNo?: string;
 
   @IsString()
   title: string;

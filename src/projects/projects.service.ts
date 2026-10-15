@@ -163,7 +163,7 @@ export class ProjectsService {
         outstandingCommitments: snapshot.openCommittedCost.toFixed(2),
         forecastUncommittedCost: snapshot.forecastUncommittedCost.toFixed(2),
         forecastFinalCosts: snapshot.forecastFinalCost.toFixed(2),
-        originalExpectedProfit: snapshot.expectedProfit.toFixed(2),
+        originalExpectedProfit: snapshot.originalExpectedProfit.toFixed(2),
         originalExpectedMargin: expectedMargin ? expectedMargin.toFixed(4) : null,
         currentForecastProfit: snapshot.forecastProfit.toFixed(2),
         profitAtRisk: snapshot.profitAtRisk.toFixed(2),

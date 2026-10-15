@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { AuditAction, EntityType, RevenuePostingType } from '@prisma/client';
 import { AuditService } from '../common/audit.service';
-import { money } from '../common/money';
+import { money, zero } from '../common/money';
 import { ProjectAccessService } from '../common/project-access.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProfitEngineService } from '../profit-engine/profit-engine.service';
@@ -27,6 +27,12 @@ export class ContractsService {
   async create(companyId: string, userId: string, projectId: string, dto: CreateContractDto) {
     await this.projects.getWritable(companyId, projectId);
     const original = money(dto.originalValue);
+    const existing = await this.prisma.contract.findFirst({ where: { projectId, companyId } });
+    if (existing) {
+      throw new ConflictException(
+        'This project already has an original contract. Record additional work as a variation.',
+      );
+    }
 
     const contract = await this.prisma.$transaction(async (tx) => {
       const created = await tx.contract.create({
@@ -49,6 +55,16 @@ export class ContractsService {
           postingType: RevenuePostingType.CONTRACT_BASE,
           amount: original,
           postingDate: created.startDate ?? new Date(),
+        },
+      });
+      await tx.contractRevision.create({
+        data: {
+          projectId,
+          contractId: created.id,
+          previousValue: zero(),
+          newValue: original,
+          reason: 'Original contract baseline recorded',
+          createdById: userId,
         },
       });
       await this.audit.record(
