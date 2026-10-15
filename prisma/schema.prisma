@@ -1,0 +1,2542 @@
+// CONSTRIQ — Construction Profit Intelligence & Project Financial Control
+//
+// North star:
+//   Expected Profit → Forecast Profit → Profit at Risk → Why? → Action
+//
+// Non-negotiable financial rules (enforced by this model + application transactions):
+//   1. No double counting: Actual, open commitment, and forecast-to-complete are mutually exclusive.
+//   2. Submitted variation is not revenue. Only approved/executed variations post to expected revenue.
+//   3. Original budget is historical and must remain visible after revisions.
+//   4. Current budget is separate; approved revisions change current, never original.
+//   5. Every actual cost is attributable, or flagged unallocated.
+//   6. Forecast-to-complete is uncommitted remaining cost only (not actual, not open commitment).
+//   7. Profit at risk = expected profit − forecast profit and must be stored explicitly.
+//   8. Material financial changes are auditable; history is reversed, not silently overwritten.
+//   9. Revenue and cost are separate; raising the cost budget never increases expected revenue.
+//  10. Health labels must be explained by ranked leakage findings.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/*
+|--------------------------------------------------------------------------
+| ENUMS
+|--------------------------------------------------------------------------
+*/
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum OtpPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  LOGIN
+}
+
+enum SystemRole {
+  OWNER
+  DIRECTOR
+  MANAGING_DIRECTOR
+  PROJECT_MANAGER
+  QUANTITY_SURVEYOR
+  CONTRACTS_MANAGER
+  COMMERCIAL_MANAGER
+  FINANCE_MANAGER
+  ACCOUNTANT
+  SITE_MANAGER
+  PROCUREMENT_MANAGER
+  ADMINISTRATOR
+  EXECUTIVE_READ_ONLY
+  READ_ONLY
+}
+
+enum CompanyStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  LEFT
+}
+
+enum PermissionModule {
+  PROJECTS
+  BUDGETS
+  ACTUAL_COSTS
+  COMMITMENTS
+  PROCUREMENT
+  SUPPLIERS
+  SUBCONTRACTORS
+  LABOUR
+  VARIATIONS
+  CLAIMS
+  PAYMENTS
+  REPORTS
+  DOCUMENTS
+  FINANCIAL_DASHBOARDS
+  COMPANY_SETTINGS
+  USERS
+  CONTRACTS
+  COST_CODES
+  CLIENTS
+}
+
+enum ProjectStatus {
+  TENDER
+  AWARDED
+  MOBILISATION
+  ACTIVE
+  ON_HOLD
+  PRACTICAL_COMPLETION
+  CLOSED
+  CANCELLED
+}
+
+enum ProjectType {
+  BUILDING
+  CIVIL
+  INFRASTRUCTURE
+  INDUSTRIAL
+  RESIDENTIAL
+  REFURBISHMENT
+  OTHER
+}
+
+enum CostCategory {
+  MATERIALS
+  LABOUR
+  SUBCONTRACTORS
+  PLANT
+  EQUIPMENT
+  TRANSPORT
+  PROFESSIONAL_SERVICES
+  SITE_OVERHEADS
+  GENERAL_EXPENSES
+  PRELIMINARIES
+  OTHER
+}
+
+enum VariationStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  EXECUTED
+  CANCELLED
+}
+
+enum VariationRevenueRule {
+  APPROVED
+  EXECUTED
+}
+
+enum BudgetRevisionStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum PoStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CLOSED
+  CANCELLED
+}
+
+enum ProcurementStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  CONVERTED_TO_PO
+  REJECTED
+  CANCELLED
+}
+
+enum CommitmentStatus {
+  OPEN
+  PARTIALLY_INVOICED
+  FULLY_INVOICED
+  CLOSED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum MatchStatus {
+  PENDING
+  MATCHED
+  PARTIAL
+  MISMATCH
+  EXCEPTION
+  RESOLVED
+}
+
+enum MatchExceptionType {
+  INVOICE_GREATER_THAN_PO
+  QUANTITY_GREATER_THAN_ORDERED
+  OUTSIDE_APPROVED_BUDGET
+  DUPLICATE_INVOICE
+  INCORRECT_PROJECT
+  INCORRECT_COST_CODE
+  UNAPPROVED_INVOICE
+}
+
+enum CertificationStatus {
+  DRAFT
+  SUBMITTED
+  CERTIFIED
+  PARTIALLY_CERTIFIED
+  REJECTED
+  PAID
+  CANCELLED
+}
+
+enum ProgressClaimStatus {
+  DRAFT
+  SUBMITTED
+  CERTIFIED
+  PARTIALLY_CERTIFIED
+  REJECTED
+  PAID
+  CANCELLED
+}
+
+enum SubcontractClaimStatus {
+  DRAFT
+  SUBMITTED
+  CERTIFIED
+  PARTIALLY_CERTIFIED
+  REJECTED
+  PAID
+  CANCELLED
+}
+
+enum ForecastStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  LOCKED
+  STALE
+}
+
+enum LeakageType {
+  BUDGET_OVERRUN
+  MATERIAL_OVERRUN
+  LABOUR_OVERRUN
+  SUBCONTRACTOR_OVERRUN
+  COMMITTED_EXPOSURE
+  UNALLOCATED_COST
+  UNPRICED_VARIATION
+  UNRECOVERED_VARIATION
+  MARGIN_DETERIORATION
+  FORECAST_DETERIORATION
+  INVOICE_MISMATCH
+  CLAIM_MISMATCH
+  PROGRESS_CLAIM_MISMATCH
+  CERTIFICATION_MISMATCH
+  CASH_FLOW_PRESSURE
+  STALE_FORECAST
+}
+
+enum LeakageSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum LeakageStatus {
+  OPEN
+  ACKNOWLEDGED
+  INVESTIGATING
+  RESOLVED
+  DISMISSED
+}
+
+enum HealthState {
+  HEALTHY
+  WATCH
+  AT_RISK
+  CRITICAL
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum ScenarioStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+  APPLIED
+}
+
+enum ScenarioAdjustmentType {
+  COST_INCREASE
+  COST_SAVING
+  VARIATION_APPROVAL
+  VARIATION_REJECTION
+  COMPLETION_DELAY
+  LABOUR_INCREASE
+  MATERIAL_PRICE_CHANGE
+  SUBCONTRACTOR_CHANGE
+  ADDITIONAL_OVERHEAD
+  CLAIM_DELAY
+  CUSTOM
+}
+
+enum CashDirection {
+  INFLOW
+  OUTFLOW
+}
+
+enum CashCategory {
+  CLIENT_CLAIM
+  CERTIFIED_CLAIM
+  EXPECTED_RECEIPT
+  RETENTION_RELEASE
+  OTHER_INCOME
+  SUPPLIER_PAYMENT
+  SUBCONTRACTOR_PAYMENT
+  LABOUR
+  PLANT
+  MATERIAL
+  TAX
+  OTHER
+}
+
+enum CashFlowStatus {
+  FORECAST
+  COMMITTED
+  ACTUAL
+  CANCELLED
+}
+
+enum DocumentKind {
+  CONTRACT
+  BOQ
+  PURCHASE_ORDER
+  SUPPLIER_INVOICE
+  SUBCONTRACT
+  CLAIM
+  CERTIFICATE
+  VARIATION
+  DRAWING
+  SITE_PHOTO
+  DELIVERY_NOTE
+  TIMESHEET
+  CORRESPONDENCE
+  REPORT
+  BUDGET_REVISION
+  OTHER
+}
+
+enum GeneratedReportType {
+  PROJECT
+  PROFITABILITY
+  COST
+  VARIATION_SCHEDULE
+  PROGRESS_CLAIM
+  CERTIFICATE
+  MANAGEMENT
+  FINANCIAL_SUMMARY
+  BUDGET
+  LEAKAGE
+  CASH_FLOW
+}
+
+enum EntityType {
+  COMPANY
+  USER
+  ROLE
+  MEMBERSHIP
+  PROJECT
+  CONTRACT
+  CONTRACT_REVISION
+  BOQ
+  BOQ_ITEM
+  BUDGET
+  BUDGET_REVISION
+  VARIATION
+  ACTUAL_COST
+  SUPPLIER
+  PROCUREMENT
+  PURCHASE_ORDER
+  PURCHASE_ORDER_LINE
+  COMMITMENT
+  SUPPLIER_INVOICE
+  SUPPLIER_INVOICE_LINE
+  SUBCONTRACTOR
+  SUBCONTRACT
+  SUBCONTRACT_CLAIM
+  WORKER
+  LABOUR_RECORD
+  EQUIPMENT
+  PLANT_RECORD
+  WORK_PACKAGE
+  MILESTONE
+  PROGRESS_RECORD
+  PROGRESS_CLAIM
+  CERTIFICATION
+  PAYMENT
+  CASH_FLOW
+  FORECAST
+  LEAKAGE
+  APPROVAL
+  DOCUMENT
+  SCENARIO
+  CLOSEOUT
+  CLIENT
+  CONSULTANT
+  IMPORT
+  ACTIVITY
+  GENERATED_REPORT
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  SUBMIT
+  EXECUTE
+  POST
+  UNPOST
+  LOCK
+  UNLOCK
+  IMPORT
+  EXPORT
+  RECONCILE
+  LOGIN
+  LOGOUT
+  SYSTEM
+}
+
+enum FinancialPostingType {
+  ACTUAL
+  COMMITMENT
+  FORECAST
+}
+
+enum FinancialSourceType {
+  SUPPLIER_INVOICE
+  SUBCONTRACT_CLAIM
+  LABOUR_RECORD
+  PLANT_RECORD
+  MANUAL_COST
+  PURCHASE_ORDER
+  SUBCONTRACT
+  FORECAST
+}
+
+enum RevenuePostingType {
+  CONTRACT_BASE
+  APPROVED_VARIATION
+  EXECUTED_VARIATION
+}
+
+enum ForecastMethod {
+  MANUAL
+  RATE_BASED
+  COMMITTED_PLUS_REMAINING
+  EARNED_VALUE
+  HISTORICAL
+  AI_ASSISTED
+}
+
+enum NotificationType {
+  PROJECT_AT_RISK
+  PROFIT_AT_RISK_INCREASED
+  BUDGET_EXCEEDED
+  COMMITMENT_OVER_BUDGET
+  VARIATION_UNRESOLVED
+  INVOICE_MISMATCH
+  CLAIM_DISCREPANCY
+  FORECAST_STALE
+  PAYMENT_OVERDUE
+  CASH_SHORTAGE
+  APPROVAL_REQUIRED
+  SYSTEM
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+  DISMISSED
+}
+
+enum ApprovalEntityType {
+  BUDGET_REVISION
+  PURCHASE_ORDER
+  COMMITMENT
+  SUPPLIER_INVOICE
+  VARIATION
+  SUBCONTRACT_CLAIM
+  PROGRESS_CLAIM
+  PAYMENT
+  PROCUREMENT
+}
+
+enum ReconciliationStatus {
+  OPEN
+  MATCHED
+  VARIANCE
+  RESOLVED
+  IGNORED
+}
+
+enum CloseoutStatus {
+  OPEN
+  IN_PROGRESS
+  READY
+  CLOSED
+  REOPENED
+}
+
+enum ImportType {
+  BOQ
+  BUDGET
+  COST
+  FORECAST
+  VARIATION
+  CLAIM
+  COMMITMENT
+}
+
+enum ImportStatus {
+  UPLOADED
+  MAPPING
+  PREVIEW
+  VALIDATING
+  IMPORTED
+  FAILED
+  CANCELLED
+}
+
+enum EquipmentOwnership {
+  OWNED
+  HIRED
+}
+
+enum EmploymentType {
+  PERMANENT
+  CONTRACT
+  CASUAL
+  SUBCONTRACT_LABOUR
+}
+
+enum PartyType {
+  CLIENT
+  SUPPLIER
+  SUBCONTRACTOR
+  CONSULTANT
+  EMPLOYEE
+  OTHER
+}
+
+enum AccountingProvider {
+  GENERIC
+  XERO
+  QUICKBOOKS
+  SAGE
+  PASTEL
+  OTHER
+}
+
+enum AccountingConnectionStatus {
+  DISCONNECTED
+  CONNECTED
+  ERROR
+  SYNCING
+}
+
+/*
+|--------------------------------------------------------------------------
+| COMPANY / TENANCY
+|--------------------------------------------------------------------------
+*/
+
+model Company {
+  id             String        @id @default(cuid())
+  legalName      String
+  tradingName    String?
+  registrationNo String?
+  taxNumber      String?
+  vatNumber      String?
+  address        String?
+  email          String?
+  phone          String?
+  logoUrl        String?
+  country        String        @default("ZA")
+  currency       String        @default("ZAR")
+  status         CompanyStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  settings              CompanySetting?
+  documentSequences     DocumentSequence[]
+  users                 User[]
+  memberships           CompanyMembership[]
+  sessions              UserSession[]
+  roleDefinitions       RoleDefinition[]
+  projects              Project[]
+  clients               Client[]
+  consultants           Consultant[]
+  suppliers             Supplier[]
+  subcontractors        Subcontractor[]
+  workers               Worker[]
+  equipment             Equipment[]
+  costCodeTemplates     CostCodeTemplate[]
+  documents             Document[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+  approvalRules         ApprovalRule[]
+  approvals             Approval[]
+  scenarios             Scenario[]
+  financialPostings     FinancialPosting[]
+  actualCosts           ActualCost[]
+  reconciliations       ReconciliationRecord[]
+  imports               DataImport[]
+  accountingConnections AccountingConnection[]
+  historicalRates       HistoricalCostRate[]
+  historicalOutcomes    HistoricalProjectOutcome[]
+  financialSnapshots    CompanyFinancialSnapshot[]
+  aiInsights            AiInsight[]
+  generatedReports      GeneratedReport[]
+
+  @@index([legalName])
+}
+
+model CompanySetting {
+  id                         String                @id @default(cuid())
+  companyId                  String                @unique
+  defaultCurrency            String                @default("ZAR")
+  financialYearStartMonth    Int                   @default(3)
+  defaultPaymentTermsDays    Int                   @default(30)
+  defaultRetentionPercent    Decimal               @default(10) @db.Decimal(8, 4)
+  variationRevenueRule       VariationRevenueRule  @default(APPROVED)
+  forecastStaleDays          Int                   @default(14)
+  defaultVatRate             Decimal               @default(15) @db.Decimal(8, 4)
+  taxInclusiveDefault        Boolean               @default(false)
+  defaultApprovalThreshold   Decimal?              @db.Decimal(18, 2)
+  notificationChannels       Json?
+  dataRetentionDays          Int?
+  auditRetentionDays         Int?
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model DocumentSequence {
+  id          String     @id @default(cuid())
+  companyId   String
+  entityType  EntityType
+  prefix      String
+  nextNumber  Int        @default(1)
+  padding     Int        @default(5)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, entityType])
+}
+
+model EmailOtp {
+  id         String     @id @default(cuid())
+  email      String
+  userId     String?
+  purpose    OtpPurpose
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int        @default(0)
+  createdAt  DateTime   @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, purpose, createdAt])
+  @@index([userId])
+}
+
+model User {
+  id              String     @id @default(cuid())
+  companyId       String
+  name            String
+  email           String     @unique
+  passwordHash    String?
+  status          UserStatus @default(INVITED)
+  emailVerifiedAt DateTime?
+  mfaEnabled      Boolean    @default(false)
+  mfaSecret       String?
+  lastLoginAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  company             Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  memberships         CompanyMembership[]
+  roles               UserRole[]
+  projects            ProjectUser[]
+  sessions            UserSession[]
+  approvalsRequested  Approval[]           @relation("ApprovalRequestedBy")
+  approvalsDecided    Approval[]           @relation("ApprovalDecidedBy")
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  uploadedDocuments   Document[]           @relation("DocumentUploadedBy")
+  forecastsCreated    CostForecast[]
+  actualCostsCreated  ActualCost[]
+  budgetRevisions     BudgetRevision[]
+  managedProjects     Project[]            @relation("ProjectManager")
+  emailOtps           EmailOtp[]
+  procurementRequested ProcurementRequest[] @relation("ProcurementRequestedBy")
+  procurementApproved  ProcurementRequest[] @relation("ProcurementApprovedBy")
+
+  @@index([companyId])
+}
+
+/*
+ * Official tenant join. User.companyId is the active/home company for this
+ * session of work. A user may later hold memberships in more than one company;
+ * JWT companyId must always match an ACTIVE membership.
+ */
+model CompanyMembership {
+  id        String           @id @default(cuid())
+  companyId String
+  userId    String
+  status    MembershipStatus @default(INVITED)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@index([userId, status])
+}
+
+model UserSession {
+  id        String    @id @default(cuid())
+  companyId String
+  userId    String
+  tokenHash String    @unique
+  ipAddress String?
+  userAgent String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model RoleDefinition {
+  id          String      @id @default(cuid())
+  companyId   String
+  name        String
+  description String?
+  systemRole  SystemRole?
+  isReadOnly  Boolean     @default(false)
+  isSystem    Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permissions   RolePermission[]
+  users         UserRole[]
+  approvalRules ApprovalRule[]
+  projectUsers  ProjectUser[]
+
+  @@unique([companyId, name])
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  description String?
+  module      PermissionModule
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       RoleDefinition @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission     @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  user User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role RoleDefinition @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROJECTS / CONTRACTS / PARTIES
+|--------------------------------------------------------------------------
+*/
+
+model Client {
+  id             String   @id @default(cuid())
+  companyId      String
+  name           String
+  registrationNo String?
+  taxNumber      String?
+  email          String?
+  phone          String?
+  address        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  projects Project[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+model Consultant {
+  id             String   @id @default(cuid())
+  companyId      String
+  name           String
+  registrationNo String?
+  taxNumber      String?
+  email          String?
+  phone          String?
+  address        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, name])
+}
+
+model Project {
+  id                   String        @id @default(cuid())
+  companyId            String
+  clientId             String?
+  projectManagerId     String?
+  code                 String
+  name                 String
+  description          String?
+  siteAddress          String?
+  projectType          ProjectType   @default(OTHER)
+  status               ProjectStatus @default(TENDER)
+  currency             String        @default("ZAR")
+  contractNo           String?
+  contractStartDate    DateTime?
+  plannedCompletionDate DateTime?
+  actualCompletionDate DateTime?
+  notes                String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  company        Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  client         Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  projectManager User?   @relation("ProjectManager", fields: [projectManagerId], references: [id], onDelete: SetNull)
+
+  users               ProjectUser[]
+  contacts            ProjectContact[]
+  contracts           Contract[]
+  contractRevisions   ContractRevision[]
+  costCodes           CostCode[]
+  boqs                Boq[]
+  budget              ProjectBudget?
+  budgetRevisions     BudgetRevision[]
+  variations          Variation[]
+  actualCosts         ActualCost[]
+  suppliers           SupplierProject[]
+  procurementRequests ProcurementRequest[]
+  purchaseOrders      PurchaseOrder[]
+  commitments         Commitment[]
+  invoices            SupplierInvoice[]
+  subcontracts        Subcontract[]
+  subcontractClaims   SubcontractClaim[]
+  labourRecords       LabourRecord[]
+  equipmentAllocations EquipmentAllocation[]
+  plantRecords        PlantRecord[]
+  workPackages        WorkPackage[]
+  activities          Activity[]
+  milestones          Milestone[]
+  generatedReports    GeneratedReport[]
+  progressRecords     ProgressRecord[]
+  progressClaims      ProgressClaim[]
+  certifications      Certification[]
+  payments            Payment[]
+  cashFlows           CashFlowEntry[]
+  forecasts           CostForecast[]
+  health              ProjectHealth?
+  healthSnapshots     ProjectHealthSnapshot[]
+  leakages            LeakageFinding[]
+  costCodePositions   CostCodePosition[]
+  documents           Document[]
+  approvals           Approval[]
+  scenarios           Scenario[]
+  closeout            ProjectCloseout?
+  historicalOutcome   HistoricalProjectOutcome?
+  financialPostings   FinancialPosting[]
+  revenuePostings     RevenuePosting[]
+  imports             DataImport[]
+  reconciliations     ReconciliationRecord[]
+  historicalRates     HistoricalCostRate[]
+  aiInsights          AiInsight[]
+  notifications       Notification[]
+  workers             WorkerProject[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status])
+}
+
+model ProjectUser {
+  id        String  @id @default(cuid())
+  projectId String
+  userId    String
+  roleId    String?
+
+  project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role    RoleDefinition? @relation(fields: [roleId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, userId])
+}
+
+model ProjectContact {
+  id        String    @id @default(cuid())
+  projectId String
+  partyType PartyType
+  name      String
+  email     String?
+  phone     String?
+  role      String?
+  notes     String?
+  createdAt DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Contract {
+  id            String  @id @default(cuid())
+  companyId     String
+  projectId     String
+  contractNo    String
+  title         String
+  originalValue Decimal @db.Decimal(18, 2)
+
+  /*
+   * Cached from RevenuePosting (CONTRACT_BASE + qualifying variations).
+   * Must be updated transactionally from RevenuePosting.
+   * Never manually edited by application code.
+   */
+  revisedValue Decimal @db.Decimal(18, 2)
+
+  startDate DateTime?
+  endDate   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  revisions       ContractRevision[]
+  revenuePostings RevenuePosting[]
+
+  @@unique([projectId, contractNo])
+  @@index([companyId])
+}
+
+model ContractRevision {
+  id            String   @id @default(cuid())
+  projectId     String
+  contractId    String
+  previousValue Decimal  @db.Decimal(18, 2)
+  newValue      Decimal  @db.Decimal(18, 2)
+  reason        String
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
+
+  @@index([projectId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| COST STRUCTURE / BOQ
+|--------------------------------------------------------------------------
+*/
+
+model CostCodeTemplate {
+  id          String       @id @default(cuid())
+  companyId   String
+  code        String
+  name        String
+  category    CostCategory @default(OTHER)
+  description String?
+  createdAt   DateTime     @default(now())
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  costCodes CostCode[]
+
+  @@unique([companyId, code])
+}
+
+model CostCode {
+  id          String       @id @default(cuid())
+  companyId   String
+  projectId   String
+  templateId  String?
+  code        String
+  name        String
+  category    CostCategory @default(OTHER)
+  description String?
+  createdAt   DateTime     @default(now())
+
+  project  Project            @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  template CostCodeTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  boqItems            BoqItem[]
+  budgetLines         ProjectBudgetLine[]
+  budgetRevisionLines BudgetRevisionLine[]
+  variations          Variation[]
+  actualCosts         ActualCost[]
+  procurementRequests ProcurementRequest[]
+  commitments         Commitment[]
+  forecasts           CostForecast[]
+  revenuePostings     RevenuePosting[]
+  financialPostings   FinancialPosting[]
+  leakageFindings     LeakageFinding[]
+  purchaseOrderLines  PurchaseOrderLine[]
+  invoiceLines        SupplierInvoiceLine[]
+  subcontracts        Subcontract[]
+  labourRecords       LabourRecord[]
+  plantRecords        PlantRecord[]
+  progressRecords     ProgressRecord[]
+  scenarioAdjustments ScenarioAdjustment[]
+  workPackages        WorkPackage[]
+  position            CostCodePosition?
+
+  @@unique([projectId, code])
+  @@index([companyId])
+}
+
+model Boq {
+  id         String   @id @default(cuid())
+  projectId  String
+  name       String
+  version    Int      @default(1)
+  isActive   Boolean  @default(true)
+  importId   String?
+  createdAt  DateTime @default(now())
+
+  project Project   @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  import  DataImport? @relation(fields: [importId], references: [id], onDelete: SetNull)
+  items   BoqItem[]
+
+  @@unique([projectId, version])
+}
+
+model BoqItem {
+  id          String        @id @default(cuid())
+  boqId       String
+  costCodeId  String?
+  itemCode    String
+  section     String?
+  category    CostCategory?
+  description String
+  quantity    Decimal       @db.Decimal(18, 4)
+  unit        String?
+  rate        Decimal       @db.Decimal(18, 4)
+  amount      Decimal       @db.Decimal(18, 2)
+  createdAt   DateTime      @default(now())
+
+  boq      Boq       @relation(fields: [boqId], references: [id], onDelete: Cascade)
+  costCode CostCode? @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+
+  budgetLines         ProjectBudgetLine[]
+  variations          Variation[]
+  invoiceLines        SupplierInvoiceLine[]
+  progressRecords     ProgressRecord[]
+  progressClaimLines  ProgressClaimLine[]
+
+  @@unique([boqId, itemCode])
+}
+
+model DataImport {
+  id          String       @id @default(cuid())
+  companyId   String
+  projectId   String?
+  type        ImportType
+  status      ImportStatus @default(UPLOADED)
+  fileName    String
+  storageKey  String
+  columnMap   Json?
+  preview     Json?
+  errors      Json?
+  errorCount  Int          @default(0)
+  importedById String?
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  boqs    Boq[]
+
+  @@index([companyId, type, status])
+}
+
+/*
+|--------------------------------------------------------------------------
+| BUDGET
+|--------------------------------------------------------------------------
+*/
+
+model ProjectBudget {
+  id        String @id @default(cuid())
+  companyId String
+  projectId String @unique
+
+  /*
+   * ORIGINAL AMOUNT IS THE HISTORICAL BASELINE.
+   * Application must never update it after first approval.
+   */
+  originalAmount Decimal @db.Decimal(18, 2)
+
+  /*
+   * Latest approved cost budget after legitimate revisions.
+   * Derived from original + approved revision differences.
+   */
+  currentAmount Decimal @db.Decimal(18, 2)
+
+  isLocked   Boolean   @default(false)
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  lines     ProjectBudgetLine[]
+  revisions BudgetRevision[]
+}
+
+model ProjectBudgetLine {
+  id             String   @id @default(cuid())
+  budgetId       String
+  costCodeId     String
+  boqItemId      String?
+  originalAmount Decimal  @db.Decimal(18, 2)
+  currentAmount  Decimal  @db.Decimal(18, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  budget   ProjectBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  costCode CostCode      @relation(fields: [costCodeId], references: [id], onDelete: Restrict)
+  boqItem  BoqItem?      @relation(fields: [boqItemId], references: [id], onDelete: SetNull)
+
+  @@unique([budgetId, costCodeId, boqItemId])
+  @@index([budgetId, costCodeId])
+}
+
+model BudgetRevision {
+  id             String               @id @default(cuid())
+  companyId      String
+  projectId      String
+  budgetId       String
+  previousAmount Decimal              @db.Decimal(18, 2)
+  newAmount      Decimal              @db.Decimal(18, 2)
+  difference     Decimal              @db.Decimal(18, 2)
+  reason         String
+  status         BudgetRevisionStatus @default(DRAFT)
+  submittedById  String?
+  approvedById   String?
+  createdAt      DateTime             @default(now())
+  approvedAt     DateTime?
+
+  budget     ProjectBudget        @relation(fields: [budgetId], references: [id], onDelete: Restrict)
+  project    Project              @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  submittedBy User?               @relation(fields: [submittedById], references: [id], onDelete: SetNull)
+  lines      BudgetRevisionLine[]
+
+  @@index([projectId, status])
+  @@index([companyId])
+}
+
+model BudgetRevisionLine {
+  id                   String  @id @default(cuid())
+  revisionId           String
+  costCodeId           String
+  originalAmount       Decimal @db.Decimal(18, 2)
+  previousCurrentAmount Decimal @db.Decimal(18, 2)
+  newCurrentAmount     Decimal @db.Decimal(18, 2)
+  difference           Decimal @db.Decimal(18, 2)
+
+  revision BudgetRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  costCode CostCode       @relation(fields: [costCodeId], references: [id], onDelete: Restrict)
+
+  @@index([revisionId, costCodeId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| VARIATIONS / REVENUE
+|--------------------------------------------------------------------------
+|
+| Draft / Submitted  → no expected revenue
+| Approved / Executed → revenue only if CompanySetting.variationRevenueRule matches
+|
+*/
+
+model Variation {
+  id               String          @id @default(cuid())
+  companyId        String
+  projectId        String
+  variationNo      String
+  title            String
+  description      String?
+  reason           String?
+  clientInstruction String?
+  instructionDate  DateTime?
+  boqItemId        String?
+  costCodeId       String?
+  contractorCost   Decimal         @db.Decimal(18, 2)
+  sellingPrice     Decimal         @db.Decimal(18, 2)
+  expectedProfit   Decimal         @db.Decimal(18, 2)
+  expectedMargin   Decimal         @db.Decimal(8, 4)
+  notes            String?
+  status           VariationStatus @default(DRAFT)
+  submittedAt      DateTime?
+  approvedAt       DateTime?
+  executedAt       DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  boqItem         BoqItem?         @relation(fields: [boqItemId], references: [id], onDelete: SetNull)
+  costCode        CostCode?        @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  revenuePostings     RevenuePosting[]
+  scenarioAdjustments ScenarioAdjustment[]
+
+  @@unique([projectId, variationNo])
+  @@index([companyId, status])
+}
+
+/*
+|--------------------------------------------------------------------------
+| ACTUAL COSTS
+|--------------------------------------------------------------------------
+*/
+
+model ActualCost {
+  id               String        @id @default(cuid())
+  companyId        String
+  projectId        String?
+  costCodeId       String?
+  supplierId       String?
+  invoiceId        String?
+  paymentId        String?
+  poId             String?
+  commitmentId     String?
+  labourRecordId   String?
+  plantRecordId    String?
+  subcontractClaimId String?
+  createdById      String?
+
+  description     String
+  amount          Decimal       @db.Decimal(18, 2)
+  taxAmount       Decimal       @default(0) @db.Decimal(18, 2)
+  transactionDate DateTime
+  reference       String?
+  payeeName       String?
+  paymentStatus   PaymentStatus @default(UNPAID)
+  isUnallocated   Boolean       @default(false)
+
+  isPosted  Boolean   @default(false)
+  postedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project          Project?          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  costCode         CostCode?         @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  supplier         Supplier?         @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  invoice          SupplierInvoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  payment          Payment?          @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  purchaseOrder    PurchaseOrder?    @relation(fields: [poId], references: [id], onDelete: SetNull)
+  commitment       Commitment?       @relation(fields: [commitmentId], references: [id], onDelete: SetNull)
+  labourRecord     LabourRecord?     @relation(fields: [labourRecordId], references: [id], onDelete: SetNull)
+  plantRecord      PlantRecord?      @relation(fields: [plantRecordId], references: [id], onDelete: SetNull)
+  subcontractClaim SubcontractClaim? @relation(fields: [subcontractClaimId], references: [id], onDelete: SetNull)
+  createdBy        User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  financialPostingId String?            @unique
+  financialPosting   FinancialPosting?  @relation(fields: [financialPostingId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, isUnallocated])
+  @@index([projectId, costCodeId])
+  @@index([projectId, transactionDate])
+  @@index([commitmentId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROCUREMENT / PURCHASE ORDERS / COMMITMENTS
+|--------------------------------------------------------------------------
+*/
+
+model Supplier {
+  id             String   @id @default(cuid())
+  companyId      String
+  name           String
+  registrationNo String?
+  taxNumber      String?
+  vatNumber      String?
+  email          String?
+  phone          String?
+  address        String?
+  bankName       String?
+  bankAccount    String?
+  bankBranch     String?
+  categories     String[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company             Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  projects            SupplierProject[]
+  procurementRequests ProcurementRequest[]
+  purchaseOrders      PurchaseOrder[]
+  commitments         Commitment[]
+  invoices            SupplierInvoice[]
+  actualCosts         ActualCost[]
+  performance         SupplierPerformance?
+  equipment           Equipment[]
+
+  @@unique([companyId, name])
+}
+
+model SupplierPerformance {
+  id                   String   @id @default(cuid())
+  supplierId           String   @unique
+  deliveryReliability  Decimal? @db.Decimal(8, 4)
+  costVariance         Decimal? @db.Decimal(18, 2)
+  qualityIssueCount    Int      @default(0)
+  outstandingDocs      Int      @default(0)
+  overduePayments      Int      @default(0)
+  updatedAt            DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+}
+
+model SubcontractorPerformance {
+  id                  String   @id @default(cuid())
+  subcontractorId     String   @unique
+  costVariance        Decimal? @db.Decimal(18, 2)
+  claimDiscrepancy    Decimal? @db.Decimal(18, 2)
+  recoveryRate        Decimal? @db.Decimal(8, 4)
+  qualityIssueCount   Int      @default(0)
+  overduePayments     Int      @default(0)
+  updatedAt           DateTime @updatedAt
+
+  subcontractor Subcontractor @relation(fields: [subcontractorId], references: [id], onDelete: Cascade)
+}
+
+model SupplierProject {
+  id         String @id @default(cuid())
+  supplierId String
+  projectId  String
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, projectId])
+}
+
+model ProcurementRequest {
+  id              String            @id @default(cuid())
+  projectId       String
+  supplierId      String?
+  costCodeId      String?
+  purchaseOrderId String?
+  requestedById   String?
+  approvedById    String?
+  requestNumber   String?
+  description     String
+  reason          String?
+  quantity        Decimal           @db.Decimal(18, 4)
+  unit            String?
+  rate            Decimal           @db.Decimal(18, 4)
+  amount          Decimal           @db.Decimal(18, 2)
+  taxAmount       Decimal           @default(0) @db.Decimal(18, 2)
+  requiredDate    DateTime?
+  deliveryDate    DateTime?
+  status          ProcurementStatus @default(DRAFT)
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  supplier      Supplier?      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  costCode      CostCode?      @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  requestedBy   User?          @relation("ProcurementRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedBy    User?          @relation("ProcurementApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId, requestNumber])
+  @@index([projectId, status])
+}
+
+model PurchaseOrder {
+  id          String    @id @default(cuid())
+  companyId   String
+  projectId   String
+  supplierId  String
+  poNumber    String
+  description String?
+  subtotal    Decimal   @db.Decimal(18, 2)
+  taxAmount   Decimal   @default(0) @db.Decimal(18, 2)
+  totalAmount Decimal   @db.Decimal(18, 2)
+  deliveryInfo String?
+  requiredDate DateTime?
+  deliveryDate DateTime?
+  status      PoStatus  @default(DRAFT)
+  approvedAt  DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  lines               PurchaseOrderLine[]
+  procurementRequests ProcurementRequest[]
+  commitments         Commitment[]
+  invoices            SupplierInvoice[]
+  actualCosts         ActualCost[]
+
+  @@unique([projectId, poNumber])
+  @@index([companyId, status])
+}
+
+model PurchaseOrderLine {
+  id              String  @id @default(cuid())
+  purchaseOrderId String
+  costCodeId      String
+  description     String
+  quantity        Decimal @db.Decimal(18, 4)
+  unit            String?
+  unitRate        Decimal @db.Decimal(18, 4)
+  taxAmount       Decimal @default(0) @db.Decimal(18, 2)
+  totalAmount     Decimal @db.Decimal(18, 2)
+  createdAt       DateTime @default(now())
+
+  purchaseOrder PurchaseOrder         @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  costCode      CostCode              @relation(fields: [costCodeId], references: [id], onDelete: Restrict)
+  invoiceLines  SupplierInvoiceLine[]
+
+  @@index([purchaseOrderId, costCodeId])
+}
+
+model Commitment {
+  id              String @id @default(cuid())
+  companyId       String
+  projectId       String
+  costCodeId      String
+  supplierId      String?
+  purchaseOrderId String?
+  subcontractId   String?
+
+  originalAmount  Decimal @db.Decimal(18, 2)
+  invoicedAmount  Decimal @default(0) @db.Decimal(18, 2)
+  remainingAmount Decimal @db.Decimal(18, 2)
+  /*
+   * Only remainingAmount is open committed cost.
+   * invoicedAmount has moved to actual cost and must not also sit here.
+   */
+
+  status    CommitmentStatus @default(OPEN)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  costCode      CostCode       @relation(fields: [costCodeId], references: [id], onDelete: Restrict)
+  supplier      Supplier?      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  subcontract   Subcontract?   @relation(fields: [subcontractId], references: [id], onDelete: SetNull)
+
+  actualCosts        ActualCost[]
+  financialPostingId String?           @unique
+  financialPosting   FinancialPosting? @relation(fields: [financialPostingId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, costCodeId, status])
+  @@index([companyId, status])
+  @@index([purchaseOrderId])
+  @@index([subcontractId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| SUPPLIER INVOICES / THREE-WAY MATCH
+|--------------------------------------------------------------------------
+*/
+
+model SupplierInvoice {
+  id              String        @id @default(cuid())
+  companyId       String
+  projectId       String
+  supplierId      String
+  purchaseOrderId String?
+  invoiceNumber   String
+  invoiceDate     DateTime
+  dueDate         DateTime?
+  subtotal        Decimal       @db.Decimal(18, 2)
+  taxAmount       Decimal       @db.Decimal(18, 2)
+  totalAmount     Decimal       @db.Decimal(18, 2)
+  matchStatus     MatchStatus   @default(PENDING)
+  paymentStatus   PaymentStatus @default(UNPAID)
+  exceptionType   MatchExceptionType?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  supplier      Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder?      @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  lines         SupplierInvoiceLine[]
+  actualCosts   ActualCost[]
+  payments      Payment[]
+
+  @@unique([supplierId, invoiceNumber])
+  @@index([projectId, matchStatus])
+  @@index([companyId])
+}
+
+model SupplierInvoiceLine {
+  id                  String      @id @default(cuid())
+  invoiceId           String
+  purchaseOrderLineId String?
+  costCodeId          String?
+  boqItemId           String?
+  description         String
+  quantity            Decimal     @db.Decimal(18, 4)
+  unitRate            Decimal     @db.Decimal(18, 4)
+  totalAmount         Decimal     @db.Decimal(18, 2)
+  matchStatus         MatchStatus @default(PENDING)
+
+  invoice           SupplierInvoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  purchaseOrderLine PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+  costCode          CostCode?          @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  boqItem           BoqItem?           @relation(fields: [boqItemId], references: [id], onDelete: SetNull)
+}
+
+/*
+|--------------------------------------------------------------------------
+| SUBCONTRACTORS
+|--------------------------------------------------------------------------
+*/
+
+model Subcontractor {
+  id             String   @id @default(cuid())
+  companyId      String
+  name           String
+  registrationNo String?
+  taxNumber      String?
+  vatNumber      String?
+  email          String?
+  phone          String?
+  address        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  contracts Subcontract[]
+  performance SubcontractorPerformance?
+
+  @@unique([companyId, name])
+}
+
+model Subcontract {
+  id                 String   @id @default(cuid())
+  companyId          String
+  projectId          String
+  subcontractorId    String
+  costCodeId         String?
+  contractNo         String
+  scope              String?
+  description        String
+  originalValue      Decimal  @db.Decimal(18, 2)
+  revisedValue       Decimal  @db.Decimal(18, 2)
+  workCompleted      Decimal  @default(0) @db.Decimal(18, 2)
+  claimsSubmitted    Decimal  @default(0) @db.Decimal(18, 2)
+  claimsCertified    Decimal  @default(0) @db.Decimal(18, 2)
+  retentionHeld      Decimal  @default(0) @db.Decimal(18, 2)
+  amountPaid         Decimal  @default(0) @db.Decimal(18, 2)
+  amountOutstanding  Decimal  @default(0) @db.Decimal(18, 2)
+  remainingCommitment Decimal @default(0) @db.Decimal(18, 2)
+  retentionPercent   Decimal  @default(0) @db.Decimal(8, 4)
+  paymentTermsDays   Int?
+  startDate          DateTime?
+  completionDate     DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  project       Project            @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subcontractor Subcontractor      @relation(fields: [subcontractorId], references: [id], onDelete: Restrict)
+  costCode      CostCode?          @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  commitments   Commitment[]
+  claims        SubcontractClaim[]
+
+  @@unique([projectId, contractNo])
+  @@index([companyId])
+}
+
+model SubcontractClaim {
+  id              String                 @id @default(cuid())
+  projectId       String
+  subcontractId   String
+  claimNo         String
+  amount          Decimal                @db.Decimal(18, 2)
+  certifiedAmount Decimal                @default(0) @db.Decimal(18, 2)
+  retentionAmount Decimal                @default(0) @db.Decimal(18, 2)
+  paidAmount      Decimal                @default(0) @db.Decimal(18, 2)
+  status          SubcontractClaimStatus @default(DRAFT)
+  claimDate       DateTime
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  project          Project            @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  subcontract      Subcontract        @relation(fields: [subcontractId], references: [id], onDelete: Restrict)
+  actualCosts        ActualCost[]
+  financialPostingId String?           @unique
+  financialPosting   FinancialPosting? @relation(fields: [financialPostingId], references: [id], onDelete: SetNull)
+
+  @@unique([subcontractId, claimNo])
+}
+
+/*
+|--------------------------------------------------------------------------
+| LABOUR / EQUIPMENT / PLANT
+|--------------------------------------------------------------------------
+*/
+
+model Worker {
+  id             String          @id @default(cuid())
+  companyId      String
+  name           String
+  employeeNo     String?
+  trade          String?
+  employmentType EmploymentType  @default(PERMANENT)
+  hourlyRate     Decimal?        @db.Decimal(18, 4)
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+
+  company       Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  labourRecords LabourRecord[]
+  projects      WorkerProject[]
+
+  @@unique([companyId, employeeNo])
+}
+
+model WorkerProject {
+  id        String @id @default(cuid())
+  workerId  String
+  projectId String
+
+  worker  Worker  @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([workerId, projectId])
+}
+
+model LabourRecord {
+  id         String   @id @default(cuid())
+  projectId  String
+  workerId   String
+  costCodeId String?
+  workDate   DateTime
+  hours      Decimal  @db.Decimal(18, 4)
+  overtimeHours Decimal @default(0) @db.Decimal(18, 4)
+  rate       Decimal  @db.Decimal(18, 4)
+  amount     Decimal  @db.Decimal(18, 2)
+  isPosted   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  worker             Worker            @relation(fields: [workerId], references: [id], onDelete: Restrict)
+  costCode           CostCode?         @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  financialPostingId String?           @unique
+  financialPosting   FinancialPosting? @relation(fields: [financialPostingId], references: [id], onDelete: SetNull)
+  actualCosts        ActualCost[]
+
+  @@index([projectId, workDate])
+}
+
+model Equipment {
+  id            String              @id @default(cuid())
+  companyId     String
+  name          String
+  code          String?
+  ownership     EquipmentOwnership  @default(OWNED)
+  hireSupplierId String?
+  hireRate      Decimal?            @db.Decimal(18, 4)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  company      Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  hireSupplier Supplier?             @relation(fields: [hireSupplierId], references: [id], onDelete: SetNull)
+  allocations  EquipmentAllocation[]
+  plantRecords PlantRecord[]
+
+  @@unique([companyId, name])
+}
+
+model EquipmentAllocation {
+  id          String    @id @default(cuid())
+  equipmentId String
+  projectId   String
+  startDate   DateTime
+  endDate     DateTime?
+  createdAt   DateTime  @default(now())
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model PlantRecord {
+  id             String   @id @default(cuid())
+  projectId      String
+  equipmentId    String?
+  costCodeId     String?
+  description    String
+  workDate       DateTime
+  operatingHours Decimal? @db.Decimal(18, 4)
+  hireRate       Decimal? @db.Decimal(18, 4)
+  fuelCost       Decimal  @default(0) @db.Decimal(18, 2)
+  maintenanceCost Decimal @default(0) @db.Decimal(18, 2)
+  transportCost  Decimal  @default(0) @db.Decimal(18, 2)
+  amount         Decimal  @db.Decimal(18, 2)
+  isPosted       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  equipment          Equipment?        @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  costCode           CostCode?         @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  financialPostingId String?           @unique
+  financialPosting   FinancialPosting? @relation(fields: [financialPostingId], references: [id], onDelete: SetNull)
+  actualCosts        ActualCost[]
+
+  @@index([projectId, workDate])
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROGRESS / CLAIMS / CERTIFICATION / PAYMENTS
+|--------------------------------------------------------------------------
+*/
+
+model WorkPackage {
+  id          String   @id @default(cuid())
+  projectId   String
+  costCodeId  String?
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  costCode        CostCode?        @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  activities      Activity[]
+  progressRecords ProgressRecord[]
+}
+
+model Activity {
+  id            String   @id @default(cuid())
+  projectId     String
+  workPackageId String?
+  name          String
+  description   String?
+  createdAt     DateTime @default(now())
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  workPackage     WorkPackage?     @relation(fields: [workPackageId], references: [id], onDelete: SetNull)
+  progressRecords ProgressRecord[]
+}
+
+model Milestone {
+  id          String    @id @default(cuid())
+  projectId   String
+  name        String
+  plannedDate DateTime?
+  actualDate  DateTime?
+  createdAt   DateTime  @default(now())
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  progressRecords ProgressRecord[]
+}
+
+model ProgressRecord {
+  id                 String   @id @default(cuid())
+  projectId          String
+  boqItemId          String?
+  costCodeId         String?
+  workPackageId      String?
+  activityId         String?
+  milestoneId        String?
+  progressDate       DateTime
+  plannedPercentage  Decimal  @default(0) @db.Decimal(8, 4)
+  actualPercentage   Decimal  @default(0) @db.Decimal(8, 4)
+  quantityCompleted  Decimal? @db.Decimal(18, 4)
+  valueCompleted     Decimal? @db.Decimal(18, 2)
+  notes              String?
+  createdAt          DateTime @default(now())
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  boqItem     BoqItem?     @relation(fields: [boqItemId], references: [id], onDelete: SetNull)
+  costCode    CostCode?    @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  workPackage WorkPackage? @relation(fields: [workPackageId], references: [id], onDelete: SetNull)
+  activity    Activity?    @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  milestone   Milestone?   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+}
+
+model ProgressClaim {
+  id                    String              @id @default(cuid())
+  companyId             String
+  projectId             String
+  claimNo               String
+  periodStart           DateTime
+  periodEnd             DateTime
+  workCompleted         Decimal             @db.Decimal(18, 2)
+  revisedContractValue  Decimal             @db.Decimal(18, 2)
+  remainingContractValue Decimal            @db.Decimal(18, 2)
+  grossAmount           Decimal             @db.Decimal(18, 2)
+  retentionAmount       Decimal             @default(0) @db.Decimal(18, 2)
+  previousCertifiedAmount Decimal           @default(0) @db.Decimal(18, 2)
+  currentAmount         Decimal             @db.Decimal(18, 2)
+  netAmount             Decimal             @db.Decimal(18, 2)
+  status                ProgressClaimStatus @default(DRAFT)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  project         Project            @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  lines           ProgressClaimLine[]
+  certifications  Certification[]
+  cashFlows       CashFlowEntry[]
+
+  @@unique([projectId, claimNo])
+  @@index([companyId])
+}
+
+model ProgressClaimLine {
+  id              String  @id @default(cuid())
+  progressClaimId String
+  boqItemId       String?
+  description     String
+  amount          Decimal @db.Decimal(18, 2)
+
+  progressClaim ProgressClaim @relation(fields: [progressClaimId], references: [id], onDelete: Cascade)
+  boqItem       BoqItem?      @relation(fields: [boqItemId], references: [id], onDelete: SetNull)
+}
+
+model Certification {
+  id                String               @id @default(cuid())
+  projectId         String
+  progressClaimId   String
+  certificateNo     String
+  amountSubmitted   Decimal              @db.Decimal(18, 2)
+  certifiedAmount   Decimal              @db.Decimal(18, 2)
+  amountRejected    Decimal              @default(0) @db.Decimal(18, 2)
+  retentionAmount   Decimal              @default(0) @db.Decimal(18, 2)
+  amountPaid        Decimal              @default(0) @db.Decimal(18, 2)
+  status            CertificationStatus  @default(DRAFT)
+  certifiedAt       DateTime?
+  paymentDueDate    DateTime?
+  createdAt         DateTime             @default(now())
+
+  project       Project       @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  progressClaim ProgressClaim @relation(fields: [progressClaimId], references: [id], onDelete: Restrict)
+  payments      Payment[]
+  cashFlows     CashFlowEntry[]
+
+  @@unique([projectId, certificateNo])
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  projectId         String
+  supplierInvoiceId String?
+  certificationId   String?
+  amount            Decimal       @db.Decimal(18, 2)
+  paymentDate       DateTime
+  reference         String?
+  status            PaymentStatus @default(PAID)
+  createdAt         DateTime      @default(now())
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  supplierInvoice SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id], onDelete: SetNull)
+  certification   Certification?   @relation(fields: [certificationId], references: [id], onDelete: SetNull)
+  actualCosts     ActualCost[]
+  cashFlows       CashFlowEntry[]
+
+  @@index([projectId, paymentDate])
+}
+
+/*
+|--------------------------------------------------------------------------
+| FORECASTING
+|--------------------------------------------------------------------------
+|
+| Forecast amount is UNCOMMITTED cost-to-complete only.
+| Forecast Final Cost = Actual + Open Commitment + this amount.
+|
+*/
+
+model CostForecast {
+  id          String         @id @default(cuid())
+  companyId   String
+  projectId   String
+  costCodeId  String
+  forecastDate DateTime
+  period      DateTime
+  amount      Decimal        @db.Decimal(18, 2)
+  reason      String
+  method      ForecastMethod @default(MANUAL)
+  status      ForecastStatus @default(DRAFT)
+  staleAt     DateTime?
+  createdById String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  costCode         CostCode          @relation(fields: [costCodeId], references: [id], onDelete: Restrict)
+  createdBy          User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  financialPostingId String?           @unique
+  financialPosting   FinancialPosting? @relation(fields: [financialPostingId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, costCodeId, period])
+  @@index([projectId, status, forecastDate])
+  @@index([companyId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| FINANCIAL POSTING LEDGER
+|--------------------------------------------------------------------------
+|
+| Every amount that contributes to project cost intelligence has one
+| posting per source + posting type. Reversal is used instead of edits.
+|
+| Unique (sourceType, sourceId, postingType) prevents the same source
+| from sitting in two cost buckets at once.
+|
+*/
+
+model FinancialPosting {
+  id           String               @id @default(cuid())
+  companyId    String
+  projectId    String?
+  costCodeId   String?
+  postingType  FinancialPostingType
+  sourceType   FinancialSourceType
+  sourceId     String
+  amount       Decimal              @db.Decimal(18, 2)
+  postingDate  DateTime
+  isReversed   Boolean              @default(false)
+  reversedAt   DateTime?
+  reversalOfId String?
+  createdAt    DateTime             @default(now())
+
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project    Project?           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  costCode   CostCode?          @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  reversalOf FinancialPosting?  @relation("FinancialPostingReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals  FinancialPosting[] @relation("FinancialPostingReversal")
+
+  actualCost       ActualCost?
+  commitment       Commitment?
+  forecast         CostForecast?
+  labourRecord     LabourRecord?
+  plantRecord      PlantRecord?
+  subcontractClaim SubcontractClaim?
+
+  @@unique([sourceType, sourceId, postingType])
+  @@index([projectId, costCodeId, postingType])
+  @@index([companyId, projectId])
+}
+
+model RevenuePosting {
+  id          String             @id @default(cuid())
+  companyId   String
+  projectId   String
+  contractId  String
+  variationId String?
+  costCodeId  String?
+  postingType RevenuePostingType
+  amount      Decimal            @db.Decimal(18, 2)
+  postingDate DateTime
+  createdAt   DateTime           @default(now())
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  contract  Contract   @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  variation Variation? @relation(fields: [variationId], references: [id], onDelete: Restrict)
+  costCode  CostCode?  @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+
+  @@unique([variationId, postingType])
+  @@index([projectId, postingType])
+  @@index([companyId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROFIT INTELLIGENCE
+|--------------------------------------------------------------------------
+|
+| Expected Revenue  = Original Contract + qualifying approved/executed variations
+| Expected Profit   = Expected Revenue − Original Cost Budget
+| Forecast Final    = Actual + Open Commitment + Forecast-to-Complete
+| Forecast Profit   = Expected Revenue − Forecast Final Cost
+| Profit at Risk    = Expected Profit − Forecast Profit
+|
+*/
+
+model ProjectHealth {
+  id                    String      @id @default(cuid())
+  companyId             String
+  projectId             String      @unique
+  state                 HealthState @default(HEALTHY)
+  explanation           String?
+  expectedRevenue       Decimal     @db.Decimal(18, 2)
+  originalBudget        Decimal     @db.Decimal(18, 2)
+  currentBudget         Decimal     @db.Decimal(18, 2)
+  actualCost            Decimal     @db.Decimal(18, 2)
+  committedCost         Decimal     @db.Decimal(18, 2)
+  forecastToComplete    Decimal     @db.Decimal(18, 2)
+  forecastFinalCost     Decimal     @db.Decimal(18, 2)
+  expectedProfit        Decimal     @db.Decimal(18, 2)
+  forecastProfit        Decimal     @db.Decimal(18, 2)
+  profitAtRisk          Decimal     @db.Decimal(18, 2)
+  originalMargin        Decimal     @db.Decimal(8, 4)
+  expectedMargin        Decimal     @db.Decimal(8, 4)
+  forecastMargin        Decimal     @db.Decimal(8, 4)
+  currentMargin         Decimal     @db.Decimal(8, 4)
+  marginDeterioration   Decimal     @db.Decimal(8, 4)
+  approvedVariations    Decimal     @default(0) @db.Decimal(18, 2)
+  certifiedRevenue      Decimal     @default(0) @db.Decimal(18, 2)
+  paidRevenue           Decimal     @default(0) @db.Decimal(18, 2)
+  outstandingRevenue    Decimal     @default(0) @db.Decimal(18, 2)
+  cashFlowExposure      Decimal     @default(0) @db.Decimal(18, 2)
+  unallocatedCost       Decimal     @default(0) @db.Decimal(18, 2)
+  unapprovedVariationExposure Decimal @default(0) @db.Decimal(18, 2)
+  forecastAgeDays       Int         @default(0)
+  primaryLeakageId      String?
+  updatedAt             DateTime    @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, state])
+}
+
+model ProjectHealthSnapshot {
+  id                  String      @id @default(cuid())
+  projectId           String
+  state               HealthState
+  explanation         String?
+  expectedRevenue     Decimal     @db.Decimal(18, 2)
+  originalBudget      Decimal     @db.Decimal(18, 2)
+  currentBudget       Decimal     @db.Decimal(18, 2)
+  actualCost          Decimal     @db.Decimal(18, 2)
+  committedCost       Decimal     @db.Decimal(18, 2)
+  forecastToComplete  Decimal     @db.Decimal(18, 2)
+  forecastFinalCost   Decimal     @db.Decimal(18, 2)
+  expectedProfit      Decimal     @db.Decimal(18, 2)
+  forecastProfit      Decimal     @db.Decimal(18, 2)
+  profitAtRisk        Decimal     @db.Decimal(18, 2)
+  originalMargin      Decimal     @db.Decimal(8, 4)
+  expectedMargin      Decimal     @db.Decimal(8, 4)
+  forecastMargin      Decimal     @db.Decimal(8, 4)
+  currentMargin       Decimal     @db.Decimal(8, 4)
+  marginDeterioration Decimal     @db.Decimal(8, 4)
+  approvedVariations  Decimal     @default(0) @db.Decimal(18, 2)
+  certifiedRevenue    Decimal     @default(0) @db.Decimal(18, 2)
+  paidRevenue         Decimal     @default(0) @db.Decimal(18, 2)
+  outstandingRevenue  Decimal     @default(0) @db.Decimal(18, 2)
+  cashFlowExposure    Decimal     @default(0) @db.Decimal(18, 2)
+  snapshotDate        DateTime    @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, snapshotDate])
+}
+
+model LeakageFinding {
+  id                String          @id @default(cuid())
+  companyId         String
+  projectId         String
+  costCodeId        String?
+  leakageType       LeakageType
+  sourceType        String
+  sourceId          String
+  title             String
+  description       String
+  financialImpact   Decimal         @db.Decimal(18, 2)
+  severity          LeakageSeverity
+  status            LeakageStatus   @default(OPEN)
+  recommendedAction String?
+  rank              Int             @default(0)
+  detectedAt        DateTime        @default(now())
+  resolvedAt        DateTime?
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  costCode CostCode? @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, severity, status])
+  @@index([projectId, rank])
+  @@index([companyId, status])
+}
+
+model CostCodePosition {
+  id                       String       @id @default(cuid())
+  companyId                String
+  projectId                String
+  costCodeId               String       @unique
+  category                 CostCategory
+  originalBudget           Decimal      @db.Decimal(18, 2)
+  currentBudget            Decimal      @db.Decimal(18, 2)
+  actualCost               Decimal      @db.Decimal(18, 2)
+  committedCost            Decimal      @db.Decimal(18, 2)
+  forecastToComplete       Decimal      @db.Decimal(18, 2)
+  forecastFinalCost        Decimal      @db.Decimal(18, 2)
+  variationPrice           Decimal      @default(0) @db.Decimal(18, 2)
+  variationCost            Decimal      @default(0) @db.Decimal(18, 2)
+  variationMargin          Decimal      @default(0) @db.Decimal(8, 4)
+  costCodeMargin           Decimal      @default(0) @db.Decimal(8, 4)
+  profitAtRiskContribution Decimal      @default(0) @db.Decimal(18, 2)
+  updatedAt                DateTime     @updatedAt
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  costCode CostCode @relation(fields: [costCodeId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, category])
+  @@index([companyId])
+}
+
+/*
+|--------------------------------------------------------------------------
+| CASH FLOW
+|--------------------------------------------------------------------------
+*/
+
+model CashFlowEntry {
+  id              String         @id @default(cuid())
+  projectId       String
+  progressClaimId String?
+  certificationId String?
+  paymentId       String?
+  direction       CashDirection
+  category        CashCategory
+  status          CashFlowStatus
+  amount          Decimal        @db.Decimal(18, 2)
+  expectedDate    DateTime
+  actualDate      DateTime?
+  horizonDays     Int?
+  description     String?
+  createdAt       DateTime       @default(now())
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  progressClaim ProgressClaim? @relation(fields: [progressClaimId], references: [id], onDelete: SetNull)
+  certification Certification? @relation(fields: [certificationId], references: [id], onDelete: SetNull)
+  payment       Payment?       @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, expectedDate, status])
+}
+
+/*
+|--------------------------------------------------------------------------
+| APPROVALS
+|--------------------------------------------------------------------------
+*/
+
+model ApprovalRule {
+  id         String             @id @default(cuid())
+  companyId  String
+  entityType ApprovalEntityType
+  minAmount  Decimal            @db.Decimal(18, 2)
+  maxAmount  Decimal?           @db.Decimal(18, 2)
+  roleId     String
+  active     Boolean            @default(true)
+
+  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  role    RoleDefinition @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, entityType, active])
+}
+
+model Approval {
+  id            String             @id @default(cuid())
+  companyId     String
+  projectId     String?
+  entityType    ApprovalEntityType
+  entityId      String
+  status        ApprovalStatus     @default(PENDING)
+  requestedById String
+  approvedById  String?
+  amount        Decimal?           @db.Decimal(18, 2)
+  comments      String?
+  createdAt     DateTime           @default(now())
+  decidedAt     DateTime?
+
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project             Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  requestedBy User  @relation("ApprovalRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy  User? @relation("ApprovalDecidedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, entityType, entityId])
+  @@index([projectId, status])
+}
+
+/*
+|--------------------------------------------------------------------------
+| DOCUMENTS
+|--------------------------------------------------------------------------
+*/
+
+model Document {
+  id           String       @id @default(cuid())
+  companyId    String
+  projectId    String?
+  entityType   EntityType
+  entityId     String
+  kind         DocumentKind @default(OTHER)
+  name         String
+  fileName     String
+  mimeType     String
+  storageKey   String
+  fileSize     Int?
+  uploadedById String
+  createdAt    DateTime     @default(now())
+
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  uploadedBy User     @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([companyId, entityType, entityId])
+  @@index([projectId])
+}
+
+model GeneratedReport {
+  id          String              @id @default(cuid())
+  companyId   String
+  projectId   String?
+  type        GeneratedReportType
+  title       String
+  storageKey  String
+  signedById  String?
+  totals      Json?
+  createdAt   DateTime            @default(now())
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, type, createdAt])
+}
+
+/*
+|--------------------------------------------------------------------------
+| NOTIFICATIONS
+|--------------------------------------------------------------------------
+*/
+
+model Notification {
+  id                String              @id @default(cuid())
+  companyId         String
+  userId            String
+  projectId         String?
+  type              NotificationType
+  channel           NotificationChannel @default(IN_APP)
+  status            NotificationStatus  @default(PENDING)
+  title             String
+  message           String
+  financialImpact   Decimal?            @db.Decimal(18, 2)
+  recommendedAction String?
+  entityType        EntityType?
+  entityId          String?
+  createdAt         DateTime            @default(now())
+  sentAt            DateTime?
+  readAt            DateTime?
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([projectId, createdAt])
+}
+
+/*
+|--------------------------------------------------------------------------
+| SCENARIOS  (what-if; never mutates official forecast unless APPLIED)
+|--------------------------------------------------------------------------
+*/
+
+model Scenario {
+  id          String         @id @default(cuid())
+  companyId   String
+  projectId   String?
+  name        String
+  description String?
+  status      ScenarioStatus @default(DRAFT)
+  projectedExpectedProfit Decimal? @db.Decimal(18, 2)
+  projectedForecastProfit Decimal? @db.Decimal(18, 2)
+  projectedProfitAtRisk   Decimal? @db.Decimal(18, 2)
+  appliedAt   DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project     Project?              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  adjustments ScenarioAdjustment[]
+}
+
+model ScenarioAdjustment {
+  id                 String                  @id @default(cuid())
+  scenarioId         String
+  costCodeId         String?
+  variationId        String?
+  adjustmentType     ScenarioAdjustmentType  @default(CUSTOM)
+  revenueAdjustment  Decimal                 @default(0) @db.Decimal(18, 2)
+  costAdjustment     Decimal                 @default(0) @db.Decimal(18, 2)
+  description        String?
+
+  scenario  Scenario   @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  costCode  CostCode?  @relation(fields: [costCodeId], references: [id], onDelete: SetNull)
+  variation Variation? @relation(fields: [variationId], references: [id], onDelete: SetNull)
+}
+
+/*
+|--------------------------------------------------------------------------
+| ACCOUNTING / RECONCILIATION
+|--------------------------------------------------------------------------
+*/
+
+model AccountingConnection {
+  id           String                      @id @default(cuid())
+  companyId    String
+  provider     AccountingProvider          @default(GENERIC)
+  status       AccountingConnectionStatus  @default(DISCONNECTED)
+  lastSyncAt   DateTime?
+  metadata     Json?
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, provider])
+}
+
+model ReconciliationRecord {
+  id             String               @id @default(cuid())
+  companyId      String
+  projectId      String?
+  sourceType     String
+  sourceId       String
+  externalType   String
+  externalId     String
+  internalAmount Decimal              @db.Decimal(18, 2)
+  externalAmount Decimal              @db.Decimal(18, 2)
+  variance       Decimal              @db.Decimal(18, 2)
+  status         ReconciliationStatus @default(OPEN)
+  notes          String?
+  createdAt      DateTime             @default(now())
+  resolvedAt     DateTime?
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([projectId, status])
+}
+
+/*
+|--------------------------------------------------------------------------
+| PROJECT CLOSEOUT / HISTORICAL / AI
+|--------------------------------------------------------------------------
+*/
+
+model ProjectCloseout {
+  id                     String         @id @default(cuid())
+  projectId              String         @unique
+  status                 CloseoutStatus @default(OPEN)
+  finalContractValue     Decimal?       @db.Decimal(18, 2)
+  finalVariations        Decimal?       @db.Decimal(18, 2)
+  finalRevenue           Decimal?       @db.Decimal(18, 2)
+  finalCost              Decimal?       @db.Decimal(18, 2)
+  finalClaims            Decimal?       @db.Decimal(18, 2)
+  finalCertifiedAmount   Decimal?       @db.Decimal(18, 2)
+  finalPayments          Decimal?       @db.Decimal(18, 2)
+  finalRetention         Decimal?       @db.Decimal(18, 2)
+  finalProfit            Decimal?       @db.Decimal(18, 2)
+  finalMargin            Decimal?       @db.Decimal(8, 4)
+  originalExpectedProfit Decimal?       @db.Decimal(18, 2)
+  profitAtRisk           Decimal?       @db.Decimal(18, 2)
+  outstandingCommitments Decimal?       @db.Decimal(18, 2)
+  outstandingClaims      Decimal?       @db.Decimal(18, 2)
+  outstandingPayments    Decimal?       @db.Decimal(18, 2)
+  majorLeakageSummary    Json?
+  lessonsLearned         String?
+  closedAt               DateTime?
+  closedById             String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+}
+
+model HistoricalCostRate {
+  id            String   @id @default(cuid())
+  companyId     String
+  projectId     String?
+  costCode      String
+  category      CostCategory
+  unit          String?
+  estimatedRate Decimal? @db.Decimal(18, 4)
+  actualRate    Decimal? @db.Decimal(18, 4)
+  variance      Decimal? @db.Decimal(18, 4)
+  createdAt     DateTime @default(now())
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, costCode])
+}
+
+model HistoricalProjectOutcome {
+  id                    String        @id @default(cuid())
+  companyId             String
+  projectId             String        @unique
+  originalMargin        Decimal?      @db.Decimal(8, 4)
+  finalMargin           Decimal?      @db.Decimal(8, 4)
+  costOverrun           Decimal?      @db.Decimal(18, 2)
+  variationRecoveryRate Decimal?      @db.Decimal(8, 4)
+  labourVariance        Decimal?      @db.Decimal(18, 2)
+  materialVariance      Decimal?      @db.Decimal(18, 2)
+  forecastAccuracy      Decimal?      @db.Decimal(8, 4)
+  frequentLeakageTypes  Json?
+  createdAt             DateTime      @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+}
+
+model CompanyFinancialSnapshot {
+  id                     String   @id @default(cuid())
+  companyId              String
+  activeProjectCount     Int      @default(0)
+  totalContractValue     Decimal  @db.Decimal(18, 2)
+  revisedContractValue   Decimal  @db.Decimal(18, 2)
+  totalOriginalBudget    Decimal  @db.Decimal(18, 2)
+  actualCost             Decimal  @db.Decimal(18, 2)
+  committedCost          Decimal  @db.Decimal(18, 2)
+  forecastFinalCost      Decimal  @db.Decimal(18, 2)
+  expectedProfit         Decimal  @db.Decimal(18, 2)
+  forecastProfit         Decimal  @db.Decimal(18, 2)
+  profitAtRisk           Decimal  @db.Decimal(18, 2)
+  expectedMargin         Decimal  @db.Decimal(8, 4)
+  forecastMargin         Decimal  @db.Decimal(8, 4)
+  atRiskProjectCount     Int      @default(0)
+  criticalProjectCount   Int      @default(0)
+  revenueOutstanding     Decimal  @db.Decimal(18, 2)
+  cashFlowExposure       Decimal  @db.Decimal(18, 2)
+  snapshotDate           DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, snapshotDate])
+}
+
+model AiInsight {
+  id          String   @id @default(cuid())
+  companyId   String
+  projectId   String?
+  question    String
+  answer      String
+  snapshotId  String?
+  createdAt   DateTime @default(now())
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+/*
+|--------------------------------------------------------------------------
+| AUDIT
+|--------------------------------------------------------------------------
+*/
+
+model AuditLog {
+  id          String       @id @default(cuid())
+  companyId   String
+  userId      String?
+  action      AuditAction
+  module      String?
+  entityType  EntityType?
+  entityId    String?
+  description String?
+  reason      String?
+  oldData     Json?
+  newData     Json?
+  ipAddress   String?
+  userAgent   String?
+  source      String?
+  createdAt   DateTime     @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([entityType, entityId])
+}
