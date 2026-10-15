@@ -19,7 +19,10 @@ export class IdentityCatalogService implements OnModuleInit {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`Permission catalog sync failed (${attempt}/${attempts}): ${message}`);
         if (attempt === attempts) {
-          throw error;
+          this.logger.error(
+            'Permission catalog sync skipped after retries; API will stay up so CORS and health checks work',
+          );
+          return;
         }
         await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
       }

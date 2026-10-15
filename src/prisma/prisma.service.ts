@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
@@ -13,6 +14,8 @@ export class PrismaService
   extends PrismaClient
   implements OnModuleInit, OnModuleDestroy
 {
+  private readonly logger = new Logger(PrismaService.name);
+
   constructor() {
     const connectionString = resolvePostgresUrl(
       process.env.DIRECT_URL ?? process.env.DATABASE_URL,
@@ -26,7 +29,21 @@ export class PrismaService
   }
 
   async onModuleInit() {
-    await this.$connect();
+    const attempts = 8;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await this.$connect();
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Database connect failed (${attempt}/${attempts}): ${message}`);
+        if (attempt === attempts) {
+          this.logger.error('Starting without a database connection; HTTP and CORS will still respond');
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+      }
+    }
   }
 
   async onModuleDestroy() {

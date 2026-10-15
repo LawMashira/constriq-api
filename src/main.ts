@@ -3,24 +3,27 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-import { corsOriginList } from './common/cors';
+import { corsOriginList, corsPreflightMiddleware } from './common/cors';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   setDefaultResultOrder('verbatim');
   const app = await NestFactory.create(AppModule);
+  app.use(corsPreflightMiddleware);
   app.setGlobalPrefix('api/v1');
   app.use(
     helmet({
       contentSecurityPolicy: false,
       crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginEmbedderPolicy: false,
     }),
   );
   app.enableCors({
     origin: corsOriginList(),
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+    optionsSuccessStatus: 204,
   });
   app.useGlobalPipes(
     new ValidationPipe({
