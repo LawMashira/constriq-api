@@ -9,7 +9,20 @@ export class IdentityCatalogService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleInit() {
-    await syncIdentityCatalog(this.prisma);
-    this.logger.log('Permission catalog synchronized');
+    const attempts = 8;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await syncIdentityCatalog(this.prisma);
+        this.logger.log('Permission catalog synchronized');
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Permission catalog sync failed (${attempt}/${attempts}): ${message}`);
+        if (attempt === attempts) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+      }
+    }
   }
 }

@@ -3,8 +3,10 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { setDefaultResultOrder } from 'node:dns';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg';
 
 @Injectable()
 export class PrismaService
@@ -15,8 +17,11 @@ export class PrismaService
     const connectionString = resolvePostgresUrl(
       process.env.DIRECT_URL ?? process.env.DATABASE_URL,
     );
+    preferRailwayPrivateDns(connectionString);
     super({
-      adapter: new PrismaPg(connectionString),
+      adapter: new PrismaPg(createPgPool(connectionString), {
+        disposeExternalPool: true,
+      }),
     });
   }
 
@@ -27,6 +32,30 @@ export class PrismaService
   async onModuleDestroy() {
     await this.$disconnect();
   }
+}
+
+function preferRailwayPrivateDns(connectionString: string) {
+  if (connectionString.includes('.railway.internal')) {
+    setDefaultResultOrder('verbatim');
+  }
+}
+
+function createPgPool(connectionString: string) {
+  const url = new URL(connectionString.replace(/^postgres:/, 'postgresql:'));
+  const internal = url.hostname.endsWith('.railway.internal');
+  const sslMode = url.searchParams.get('sslmode');
+
+  return new Pool({
+    host: url.hostname,
+    port: Number(url.port || 5432),
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database: decodeURIComponent(url.pathname.replace(/^\//, '')) || undefined,
+    ssl: internal || sslMode === 'disable' ? false : { rejectUnauthorized: false },
+    connectionTimeoutMillis: 20_000,
+    idleTimeoutMillis: 30_000,
+    max: 10,
+  });
 }
 
 function resolvePostgresUrl(raw?: string): string {
