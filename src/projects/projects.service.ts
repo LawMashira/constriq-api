@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   AuditAction,
+  CostCategory,
   EntityType,
   FinancialPostingType,
   FinancialSourceType,
@@ -282,10 +283,16 @@ export class ProjectsService {
       companyId: string;
       userId: string;
       projectId: string;
-      lines: Array<{ code: string; name: string; category: import('@prisma/client').CostCategory; amount: Prisma.Decimal }>;
+      lines: Array<{ code: string; name: string; category: CostCategory; amount: Prisma.Decimal }>;
     },
   ) {
-    const codes = [];
+    const codes: Array<{
+      code: string;
+      name: string;
+      category: CostCategory;
+      amount: Prisma.Decimal;
+      costCodeId: string;
+    }> = [];
     for (const line of input.lines) {
       const costCode = await tx.costCode.create({
         data: {
