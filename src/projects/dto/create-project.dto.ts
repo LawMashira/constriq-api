@@ -1,11 +1,49 @@
 import { ProjectStatus, ProjectType } from '@prisma/client';
-import { IsDateString, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsDateString,
+  IsEnum,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
+import { IsMoney } from '../../common/dto/money-field';
+
+export class ExpectedCostBreakdownDto {
+  @IsOptional()
+  @IsMoney()
+  materials?: string;
+
+  @IsOptional()
+  @IsMoney()
+  labour?: string;
+
+  @IsOptional()
+  @IsMoney()
+  transport?: string;
+
+  @IsOptional()
+  @IsMoney()
+  equipment?: string;
+
+  @IsOptional()
+  @IsMoney()
+  subcontractors?: string;
+
+  @IsOptional()
+  @IsMoney()
+  other?: string;
+}
 
 export class CreateProjectDto {
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(40)
-  code: string;
+  code?: string;
 
   @IsString()
   @MinLength(2)
@@ -47,4 +85,21 @@ export class CreateProjectDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsMoney()
+  originalContractValue?: string;
+
+  @IsOptional()
+  @IsMoney()
+  expectedTotalCost?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ExpectedCostBreakdownDto)
+  expectedCosts?: ExpectedCostBreakdownDto;
+
+  @IsOptional()
+  @IsBoolean()
+  usesBoq?: boolean;
 }
