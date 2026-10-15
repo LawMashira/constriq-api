@@ -20,27 +20,54 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
 const logger = new Logger('PrismaService');
 
 export async function createPrismaService() {
-  const connectionString = resolvePostgresUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL);
-  if (!connectionString) {
+  const candidates = uniqueUrls([
+    process.env.DATABASE_PUBLIC_URL,
+    process.env.DATABASE_URL,
+    process.env.DIRECT_URL,
+  ]);
+  if (candidates.length === 0) {
     throw new Error('DATABASE_URL is required');
   }
 
-  preferRailwayDns(connectionString);
-  const pool = createPgPool(connectionString);
-  try {
-    await pool.query('select 1');
-    logger.log(`Connected to Postgres at ${describeHost(connectionString)}`);
-    return new PrismaService(pool);
-  } catch (error) {
-    const host = describeHost(connectionString);
-    logger.error(
-      `DATABASE_URL host ${host} is unreachable (${error instanceof Error ? error.message : 'unknown error'}). ` +
-        (host.includes('.railway.internal')
-          ? 'postgres.railway.internal is private to Railway. On the Postgres service open Connect / TCP Proxy, copy the public URL, and set that as DATABASE_URL on constriq-api.'
-          : 'Check DATABASE_URL, SSL, and that the database is running.'),
-    );
-    return new PrismaService(pool);
+  let lastError: unknown;
+  for (const connectionString of candidates) {
+    preferRailwayDns(connectionString);
+    const pool = createPgPool(connectionString);
+    try {
+      await pool.query('select 1');
+      logger.log(`Connected to Postgres at ${describeHost(connectionString)}`);
+      return new PrismaService(pool);
+    } catch (error) {
+      lastError = error;
+      logger.warn(
+        `Could not reach ${describeHost(connectionString)} (${error instanceof Error ? error.message.split('\n')[0] : 'unknown error'})`,
+      );
+      await pool.end().catch(() => undefined);
+    }
   }
+
+  const fallback = candidates[candidates.length - 1];
+  logger.error(
+    `No reachable Postgres URL. Last error: ${lastError instanceof Error ? lastError.message.split('\n')[0] : 'unknown'}. ` +
+      (candidates.every((url) => url.includes('.railway.internal'))
+        ? 'Set DATABASE_PUBLIC_URL on constriq-api to the Postgres TCP proxy URL (*.proxy.rlwy.net).'
+        : 'Check DATABASE_URL / DATABASE_PUBLIC_URL.'),
+  );
+  return new PrismaService(createPgPool(fallback));
+}
+
+function uniqueUrls(raw: Array<string | undefined>) {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  for (const value of raw) {
+    const resolved = resolvePostgresUrl(value);
+    if (!resolved || seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    urls.push(resolved);
+  }
+  return urls;
 }
 
 function preferRailwayDns(connectionString: string) {
@@ -56,10 +83,9 @@ function createPgPool(connectionString: string) {
   }
   const internal = url.hostname.endsWith('.railway.internal');
   const sslMode = url.searchParams.get('sslmode');
-  const normalized = url.toString();
 
   return new Pool({
-    connectionString: normalized,
+    connectionString: url.toString(),
     ssl: internal || sslMode === 'disable' ? false : { rejectUnauthorized: false },
     connectionTimeoutMillis: 15_000,
     idleTimeoutMillis: 30_000,

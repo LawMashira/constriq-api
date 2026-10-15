@@ -10,6 +10,6 @@ export default defineConfig({
     seed: "npx ts-node --transpile-only prisma/seed.ts",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: process.env["DATABASE_PUBLIC_URL"] ?? process.env["DATABASE_URL"],
   },
 });
