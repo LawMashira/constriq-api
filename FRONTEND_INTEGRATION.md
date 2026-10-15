@@ -15,7 +15,7 @@ Interactive explorer (when the API is running): `GET /api/v1/docs`
 | Example | `http://localhost:3000/api/v1/projects` |
 | Content type | `application/json` unless noted (multipart for files) |
 | Auth | `Authorization: Bearer <accessToken>` on every non-public route |
-| CORS | `CORS_ORIGIN` comma-separated, or all origins if unset |
+| CORS | Allows `https://constriq.vercel.app` plus local Vite/Nest origins. Extra origins via `CORS_ORIGIN` (comma-separated). |
 
 Unknown JSON fields are **rejected** (`forbidNonWhitelisted`). Extra properties in request bodies will 400.
 
