@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "node --dns-result-order=verbatim dist/main.js",
+    "startCommand": "node --dns-result-order=ipv4first dist/main.js",
     "restartPolicyType": "ON_FAILURE"
   }
 }

@@ -17,4 +17,4 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma7.config.ts ./
 EXPOSE 8080
-CMD ["node", "--dns-result-order=verbatim", "dist/main.js"]
+CMD ["node", "--dns-result-order=ipv4first", "dist/main.js"]

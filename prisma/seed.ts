@@ -1,19 +1,18 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, UserStatus } from '@prisma/client';
-import { Pool } from 'pg';
 import {
   bootstrapCompanyIdentity,
   ensureGlobalPermissions,
 } from '../src/identity/tenant-bootstrap';
+import { createPostgresPool } from '../src/prisma/prisma.service';
 
-const connectionString =
-  process.env.DATABASE_PUBLIC_URL ?? process.env.DIRECT_URL ?? process.env.DATABASE_URL;
+const connectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
 if (!connectionString) {
-  throw new Error('DATABASE_URL, DIRECT_URL, or DATABASE_PUBLIC_URL is required');
+  throw new Error('DIRECT_URL or DATABASE_URL is required');
 }
 
-const pool = new Pool({ connectionString });
+const pool = createPostgresPool(connectionString);
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
 async function main() {

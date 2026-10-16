@@ -7,7 +7,7 @@ import { corsPreflightMiddleware, isAllowedCorsOrigin } from './common/cors';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  setDefaultResultOrder('verbatim');
+  setDefaultResultOrder('ipv4first');
   const app = await NestFactory.create(AppModule);
   app.use(corsPreflightMiddleware);
   app.setGlobalPrefix('api/v1');
