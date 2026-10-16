@@ -78,9 +78,8 @@ function toPgUrl(connectionString: string) {
   }
   url.searchParams.delete('pgbouncer');
   url.searchParams.delete('connection_limit');
-  if (!url.searchParams.get('sslmode')) {
-    url.searchParams.set('sslmode', 'require');
-  }
+  // node-pg treats sslmode=require as full CA verification (P1011 on Railway → Supabase).
+  url.searchParams.set('sslmode', 'no-verify');
   return url;
 }
 
