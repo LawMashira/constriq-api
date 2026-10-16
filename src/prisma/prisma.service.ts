@@ -59,7 +59,6 @@ export function createPostgresPool(connectionString: string) {
   const pool = new Pool({
     connectionString: url.toString(),
     ssl: { rejectUnauthorized: false },
-    family: 4,
     keepAlive: true,
     keepAliveInitialDelayMillis: 5_000,
     connectionTimeoutMillis: 15_000,
