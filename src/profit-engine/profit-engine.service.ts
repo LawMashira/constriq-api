@@ -11,10 +11,11 @@ import {
   RevenuePostingType,
   SystemRole,
   UserStatus,
+  VariationRevenueRule,
 } from '@prisma/client';
 import { money, sum, zero } from '../common/money';
 import { PrismaService } from '../prisma/prisma.service';
-import { calculateProfit } from './profit-formulas';
+import { calculateProfit, variationQualifiesForRevenue } from './profit-formulas';
 import { explainCostOverruns } from './profit-explanations';
 
 @Injectable()
@@ -38,7 +39,7 @@ export class ProfitEngineService {
 
   private async runRecalculate(companyId: string, projectId: string) {
     const snapshot = await this.compute(companyId, projectId);
-    const state = healthState(snapshot.profitAtRisk, snapshot.expectedProfit);
+    const state = healthState(snapshot.profitAtRisk, snapshot.currentPlannedProfit);
     const reasons = await this.syncLeakage(companyId, projectId, snapshot);
 
     const payload = {
@@ -127,7 +128,7 @@ export class ProfitEngineService {
   }
 
   async compute(companyId: string, projectId: string) {
-    const [contracts, variations, budget, postings, costCodes, unallocated, submittedVars, project, certifications, payments] =
+    const [contracts, variationPostings, voRows, budget, postings, costCodes, unallocated, project, certifications, payments, settings] =
       await Promise.all([
         this.prisma.contract.findMany({ where: { projectId, companyId } }),
         this.prisma.revenuePosting.findMany({
@@ -139,6 +140,10 @@ export class ProfitEngineService {
               in: [RevenuePostingType.APPROVED_VARIATION, RevenuePostingType.EXECUTED_VARIATION],
             },
           },
+        }),
+        this.prisma.variation.findMany({
+          where: { projectId, companyId },
+          select: { status: true, sellingPrice: true, contractorCost: true },
         }),
         this.prisma.projectBudget.findUnique({
           where: { projectId },
@@ -152,10 +157,6 @@ export class ProfitEngineService {
           where: { companyId, projectId, isUnallocated: true },
           _sum: { amount: true },
         }),
-        this.prisma.variation.aggregate({
-          where: { projectId, companyId, status: { in: ['DRAFT', 'SUBMITTED'] } },
-          _sum: { sellingPrice: true },
-        }),
         this.prisma.project.findFirst({
           where: { id: projectId, companyId },
           select: { usesBoq: true },
@@ -168,10 +169,22 @@ export class ProfitEngineService {
           where: { projectId, certificationId: { not: null } },
           _sum: { amount: true },
         }),
+        this.prisma.companySetting.findUnique({
+          where: { companyId },
+          select: { variationRevenueRule: true },
+        }),
       ]);
 
     const originalContractValue = sum(contracts.map((item) => item.originalValue));
-    const qualifyingVariationRevenue = sum(variations.map((item) => item.amount));
+    const qualifyingVariationRevenue = sum(variationPostings.map((item) => item.amount));
+    const rule = settings?.variationRevenueRule ?? VariationRevenueRule.APPROVED;
+    const qualifyingVos = voRows.filter((item) => variationQualifiesForRevenue(item.status, rule));
+    const qualifyingVariationProfit = sum(
+      qualifyingVos.map((item) => money(item.sellingPrice).minus(item.contractorCost)),
+    );
+    const pendingVos = voRows.filter((item) => item.status === 'DRAFT' || item.status === 'SUBMITTED');
+    const pendingVariationRevenue = sum(pendingVos.map((item) => item.sellingPrice));
+    const pendingVariationCost = sum(pendingVos.map((item) => item.contractorCost));
     const actualCost = sum(
       postings.filter((item) => item.postingType === FinancialPostingType.ACTUAL).map((item) => item.amount),
     );
@@ -189,6 +202,7 @@ export class ProfitEngineService {
     const profit = calculateProfit({
       originalContractValue,
       qualifyingVariationRevenue,
+      qualifyingVariationProfit,
       originalCostBudget: budget?.originalAmount ?? zero(),
       currentCostBudget: budget?.currentAmount ?? zero(),
       actualCost,
@@ -208,7 +222,8 @@ export class ProfitEngineService {
       currentApprovedContractValue: profit.expectedRevenue,
       qualifyingVariationRevenue,
       unallocatedCost: money(unallocated._sum.amount ?? 0),
-      unapprovedVariationExposure: money(submittedVars._sum.sellingPrice ?? 0),
+      unapprovedVariationExposure: pendingVariationRevenue,
+      pendingVariationCost,
       costEstimateIncomplete,
       usesBoq: project?.usesBoq ?? false,
       contributors: this.contributors(postings, profit.profitAtRisk),
@@ -259,9 +274,9 @@ export class ProfitEngineService {
           title: driver.title,
           description: driver.description,
           financialImpact: driver.amount,
-          severity: driver.amount.gte(snapshot.expectedProfit.times(0.5))
+          severity: driver.amount.gte(snapshot.currentPlannedProfit.times(0.5))
             ? LeakageSeverity.CRITICAL
-            : driver.amount.gte(snapshot.expectedProfit.times(0.25))
+            : driver.amount.gte(snapshot.currentPlannedProfit.times(0.25))
               ? LeakageSeverity.HIGH
               : LeakageSeverity.MEDIUM,
           recommendedAction: driver.action,
@@ -275,9 +290,9 @@ export class ProfitEngineService {
         sourceType: 'PROJECT',
         sourceId: projectId,
         title: 'Profit is below what we expected',
-        description: `Forecast profit is R ${snapshot.forecastProfit.toFixed(2)}, R ${snapshot.profitAtRisk.toFixed(2)} below the expected R ${snapshot.expectedProfit.toFixed(2)}.`,
+        description: `Forecast profit is R ${snapshot.forecastProfit.toFixed(2)}, R ${snapshot.profitAtRisk.toFixed(2)} below the planned R ${snapshot.currentPlannedProfit.toFixed(2)}.`,
         financialImpact: snapshot.profitAtRisk,
-        severity: snapshot.profitAtRisk.gte(snapshot.expectedProfit.times(0.5))
+        severity: snapshot.profitAtRisk.gte(snapshot.currentPlannedProfit.times(0.5))
           ? LeakageSeverity.CRITICAL
           : LeakageSeverity.HIGH,
         recommendedAction: 'Open Actual costs, Labour, Plant and Procurement to see what was posted.',
@@ -311,18 +326,19 @@ export class ProfitEngineService {
         recommendedAction: 'Open Actual costs and assign a cost code.',
       });
     }
-    if (snapshot.unapprovedVariationExposure.gt(0)) {
+    if (snapshot.pendingVariationCost.gt(0)) {
       findings.push({
         companyId,
         projectId,
         leakageType: LeakageType.UNRECOVERED_VARIATION,
         sourceType: 'PROJECT',
         sourceId: projectId,
-        title: 'Unrecovered variation',
-        description: 'Submitted or draft variations are not revenue',
-        financialImpact: snapshot.unapprovedVariationExposure,
+        title: 'Variation cost waiting for client approval',
+        description:
+          'Pending extra work is not billed yet. Only the variation cost is exposure until the client approves it — the selling price is not profit at risk.',
+        financialImpact: snapshot.pendingVariationCost,
         severity: LeakageSeverity.MEDIUM,
-        recommendedAction: 'Pursue client approval or reverse the cost exposure',
+        recommendedAction: 'Get the variation approved, or keep the extra cost out of the job if the work is not proceeding.',
       });
     }
 
@@ -334,7 +350,7 @@ export class ProfitEngineService {
       where: { projectId, companyId, status: LeakageStatus.OPEN },
       orderBy: { financialImpact: 'desc' },
     });
-    await this.notifyLeakage(companyId, projectId, healthState(snapshot.profitAtRisk, snapshot.expectedProfit), open);
+    await this.notifyLeakage(companyId, projectId, healthState(snapshot.profitAtRisk, snapshot.currentPlannedProfit), open);
     return open;
   }
 

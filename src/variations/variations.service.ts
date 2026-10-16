@@ -2,6 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/com
 import {
   AuditAction,
   EntityType,
+  FinancialPostingType,
+  FinancialSourceType,
   Prisma,
   RevenuePostingType,
   VariationRevenueRule,
@@ -138,10 +140,24 @@ export class VariationsService {
           variation: updated,
           rule,
         });
+        await this.postCost(tx, {
+          companyId,
+          projectId,
+          variation: updated,
+        });
       } else {
         await tx.revenuePosting.updateMany({
           where: { variationId: variation.id, isReversed: false },
           data: { isReversed: true },
+        });
+        await tx.financialPosting.updateMany({
+          where: {
+            sourceType: FinancialSourceType.FORECAST,
+            sourceId: variation.id,
+            postingType: FinancialPostingType.FORECAST,
+            isReversed: false,
+          },
+          data: { isReversed: true, reversedAt: new Date() },
         });
       }
 
@@ -195,6 +211,40 @@ export class VariationsService {
 
     await this.profit.recalculate(companyId, projectId);
     return this.prisma.variation.findUniqueOrThrow({ where: { id: variationId } });
+  }
+
+  private async postCost(
+    tx: Prisma.TransactionClient,
+    input: {
+      companyId: string;
+      projectId: string;
+      variation: { id: string; contractorCost: Prisma.Decimal; costCodeId: string | null };
+    },
+  ) {
+    const amount = money(input.variation.contractorCost);
+    if (amount.lte(0)) {
+      return;
+    }
+    await tx.financialPosting.upsert({
+      where: {
+        sourceType_sourceId_postingType: {
+          sourceType: FinancialSourceType.FORECAST,
+          sourceId: input.variation.id,
+          postingType: FinancialPostingType.FORECAST,
+        },
+      },
+      create: {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        costCodeId: input.variation.costCodeId,
+        postingType: FinancialPostingType.FORECAST,
+        sourceType: FinancialSourceType.FORECAST,
+        sourceId: input.variation.id,
+        amount,
+        postingDate: new Date(),
+      },
+      update: { amount, isReversed: false, reversedAt: null },
+    });
   }
 
   private async postRevenue(

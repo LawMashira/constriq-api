@@ -7,6 +7,7 @@ describe('profit formulas', () => {
   const result = calculateProfit({
     originalContractValue: d('10000000'),
     qualifyingVariationRevenue: d('500000'),
+    qualifyingVariationProfit: d('500000'),
     originalCostBudget: d('8000000'),
     currentCostBudget: d('8500000'),
     actualCost: d('4000000'),
@@ -35,7 +36,8 @@ describe('profit formulas', () => {
 
   it('computes forecast profit from current approved revenue minus forecast final cost', () => {
     expect(result.forecastProfit.toFixed(2)).toBe('1700000.00');
-    expect(result.profitAtRisk.toFixed(2)).toBe('300000.00');
+    expect(result.currentPlannedProfit.toFixed(2)).toBe('2500000.00');
+    expect(result.profitAtRisk.toFixed(2)).toBe('800000.00');
     expect(result.forecastMargin?.toFixed(4)).toBe('16.1905');
   });
 
@@ -57,6 +59,7 @@ describe('profit formulas', () => {
     const approved = calculateProfit({
       originalContractValue: d('100000.00'),
       qualifyingVariationRevenue: d('50000.00'),
+      qualifyingVariationProfit: d('50000.00'),
       originalCostBudget: d('80000.00'),
       currentCostBudget: d('80000.00'),
       actualCost: d('10000.00'),
@@ -68,6 +71,25 @@ describe('profit formulas', () => {
     expect(approved.originalExpectedProfit.toFixed(2)).toBe('20000.00');
     expect(approved.forecastFinalCost.toFixed(2)).toBe('80000.00');
     expect(approved.forecastProfit.toFixed(2)).toBe('70000.00');
+    expect(approved.profitAtRisk.toFixed(2)).toBe('0.00');
+  });
+
+  it('does not treat variation selling price as profit at risk', () => {
+    const vo = calculateProfit({
+      originalContractValue: d('100000.00'),
+      qualifyingVariationRevenue: d('17000.00'),
+      qualifyingVariationProfit: d('7000.00'),
+      originalCostBudget: d('80000.00'),
+      currentCostBudget: d('90000.00'),
+      actualCost: d('0'),
+      openCommittedCost: d('0'),
+      forecastUncommittedCost: d('90000.00'),
+    });
+    expect(vo.expectedRevenue.toFixed(2)).toBe('117000.00');
+    expect(vo.originalExpectedProfit.toFixed(2)).toBe('20000.00');
+    expect(vo.currentPlannedProfit.toFixed(2)).toBe('27000.00');
+    expect(vo.forecastProfit.toFixed(2)).toBe('27000.00');
+    expect(vo.profitAtRisk.toFixed(2)).toBe('0.00');
   });
 
   it('returns null margin when expected revenue is zero', () => {
@@ -108,6 +130,7 @@ describe('profit formulas', () => {
     const approved = calculateProfit({
       originalContractValue: d('100000'),
       qualifyingVariationRevenue: d('50000'),
+      qualifyingVariationProfit: d('50000'),
       originalCostBudget: d('80000'),
       currentCostBudget: d('80000'),
       actualCost: d('10000'),
