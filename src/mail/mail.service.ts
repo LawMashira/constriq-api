@@ -87,8 +87,21 @@ export class MailService {
     if (!response.ok) {
       const detail = await response.text();
       this.logger.error(`Brevo send failed (${response.status}): ${detail}`);
+      if (response.status === 401 && detail.includes('authorised_ips')) {
+        throw new InternalServerErrorException(
+          'Brevo blocked this server IP. Add it under Security → Authorised IPs, or turn off IP restriction for the API key.',
+        );
+      }
+      if (response.status === 400 && /sender/i.test(detail)) {
+        throw new InternalServerErrorException(
+          'Brevo rejected the sender. Verify noreply@constriq.app (or BREVO_SENDER_EMAIL) in Brevo Senders.',
+        );
+      }
       throw new InternalServerErrorException('Failed to send email');
     }
+
+    const payload = (await response.json().catch(() => null)) as { messageId?: string } | null;
+    this.logger.log(`Brevo accepted email to ${input.to} messageId=${payload?.messageId ?? 'unknown'}`);
   }
 }
 
