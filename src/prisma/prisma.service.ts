@@ -21,6 +21,7 @@ const logger = new Logger('PrismaService');
 
 export async function createPrismaService() {
   setDefaultResultOrder('ipv4first');
+  process.env.PGSSLMODE = 'no-verify';
   const candidates = uniqueUrls([process.env.DATABASE_URL, process.env.DIRECT_URL]);
   if (candidates.length === 0) {
     throw new Error('DATABASE_URL is required');
@@ -55,9 +56,13 @@ export async function createPrismaService() {
 }
 
 export function createPostgresPool(connectionString: string) {
-  const url = toPgUrl(connectionString);
+  const url = new URL(connectionString.replace(/^postgres:/, 'postgresql:'));
   const pool = new Pool({
-    connectionString: url.toString(),
+    host: url.hostname,
+    port: Number(url.port || 5432),
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database: decodeURIComponent(url.pathname.replace(/^\//, '')) || 'postgres',
     ssl: { rejectUnauthorized: false },
     keepAlive: true,
     keepAliveInitialDelayMillis: 5_000,
@@ -69,18 +74,6 @@ export function createPostgresPool(connectionString: string) {
     logger.warn(`Idle Postgres client error: ${summarizeError(error)}`);
   });
   return pool;
-}
-
-function toPgUrl(connectionString: string) {
-  const url = new URL(connectionString.replace(/^postgres:/, 'postgresql:'));
-  if (!url.port) {
-    url.port = '5432';
-  }
-  url.searchParams.delete('pgbouncer');
-  url.searchParams.delete('connection_limit');
-  // node-pg treats sslmode=require as full CA verification (P1011 on Railway → Supabase).
-  url.searchParams.set('sslmode', 'no-verify');
-  return url;
 }
 
 function uniqueUrls(raw: Array<string | undefined>) {
