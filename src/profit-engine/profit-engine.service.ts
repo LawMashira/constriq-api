@@ -143,7 +143,7 @@ export class ProfitEngineService {
         }),
         this.prisma.variation.findMany({
           where: { projectId, companyId },
-          select: { status: true, sellingPrice: true, contractorCost: true },
+          select: { status: true, sellingPrice: true, contractorCost: true, costCodeId: true },
         }),
         this.prisma.projectBudget.findUnique({
           where: { projectId },
@@ -179,6 +179,7 @@ export class ProfitEngineService {
     const qualifyingVariationRevenue = sum(variationPostings.map((item) => item.amount));
     const rule = settings?.variationRevenueRule ?? VariationRevenueRule.APPROVED;
     const qualifyingVos = voRows.filter((item) => variationQualifiesForRevenue(item.status, rule));
+    const qualifyingVariationCost = sum(qualifyingVos.map((item) => item.contractorCost));
     const qualifyingVariationProfit = sum(
       qualifyingVos.map((item) => money(item.sellingPrice).minus(item.contractorCost)),
     );
@@ -203,6 +204,7 @@ export class ProfitEngineService {
       originalContractValue,
       qualifyingVariationRevenue,
       qualifyingVariationProfit,
+      qualifyingVariationCost,
       originalCostBudget: budget?.originalAmount ?? zero(),
       currentCostBudget: budget?.currentAmount ?? zero(),
       actualCost,
@@ -230,6 +232,10 @@ export class ProfitEngineService {
       costDrivers: explainCostOverruns({
         profitAtRisk: profit.profitAtRisk,
         budgetLines: budget?.lines ?? [],
+        variationCosts: qualifyingVos.map((item) => ({
+          costCodeId: item.costCodeId,
+          amount: item.contractorCost,
+        })),
         postings,
         costCodes,
       }),

@@ -30,4 +30,22 @@ describe('explainCostOverruns', () => {
     expect(drivers[0]?.action).toContain('Labour');
     expect(drivers[0]?.leakageType).toBe(LeakageType.LABOUR_OVERRUN);
   });
+
+  it('does not treat approved variation cost as an original-budget overrun', () => {
+    const drivers = explainCostOverruns({
+      profitAtRisk: d('10000.00'),
+      budgetLines: [{ costCodeId: 'gen', originalAmount: d('80000.00') }],
+      variationCosts: [{ costCodeId: 'gen', amount: d('10000.00') }],
+      costCodes: [{ id: 'gen', code: 'GEN', name: 'Project expected costs', category: CostCategory.OTHER }],
+      postings: [
+        {
+          costCodeId: 'gen',
+          postingType: FinancialPostingType.FORECAST,
+          sourceType: FinancialSourceType.FORECAST,
+          amount: d('90000.00'),
+        },
+      ],
+    });
+    expect(drivers).toEqual([]);
+  });
 });

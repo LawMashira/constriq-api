@@ -5,6 +5,7 @@ export type ProfitInputs = {
   originalContractValue: Prisma.Decimal;
   qualifyingVariationRevenue: Prisma.Decimal;
   qualifyingVariationProfit?: Prisma.Decimal;
+  qualifyingVariationCost?: Prisma.Decimal;
   originalCostBudget: Prisma.Decimal;
   currentCostBudget: Prisma.Decimal;
   actualCost: Prisma.Decimal;
@@ -38,13 +39,18 @@ export function calculateProfit(input: ProfitInputs): ProfitResult {
   const expectedRevenue = originalContractValue.plus(money(input.qualifyingVariationRevenue));
   const originalBudget = money(input.originalCostBudget);
   const originalExpectedProfit = subtract(originalContractValue, originalBudget);
-  const currentPlannedProfit = originalExpectedProfit.plus(money(input.qualifyingVariationProfit ?? zero()));
+  const variationCost = money(input.qualifyingVariationCost ?? zero());
+  const variationProfit = money(
+    input.qualifyingVariationProfit ?? money(input.qualifyingVariationRevenue).minus(variationCost),
+  );
+  const currentPlannedProfit = originalExpectedProfit.plus(variationProfit);
   const actualCost = money(input.actualCost);
   const openCommittedCost = money(input.openCommittedCost);
   const forecastUncommittedCost = money(input.forecastUncommittedCost);
   const forecastFinalCost = actualCost.plus(openCommittedCost).plus(forecastUncommittedCost);
   const forecastProfit = subtract(expectedRevenue, forecastFinalCost);
-  const profitAtRisk = subtract(currentPlannedProfit, forecastProfit);
+  const allowedFinalCost = originalBudget.plus(variationCost);
+  const profitAtRisk = subtract(forecastFinalCost, allowedFinalCost);
 
   return {
     originalContractValue,

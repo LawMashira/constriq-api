@@ -27,6 +27,7 @@ type CodeInfo = {
 export function explainCostOverruns(input: {
   profitAtRisk: Prisma.Decimal;
   budgetLines: Array<{ costCodeId: string; originalAmount: Prisma.Decimal }>;
+  variationCosts?: Array<{ costCodeId: string | null; amount: Prisma.Decimal }>;
   postings: Posting[];
   costCodes: CodeInfo[];
 }): CostDriver[] {
@@ -38,6 +39,13 @@ export function explainCostOverruns(input: {
   const originalByCode = new Map<string, Prisma.Decimal>();
   for (const line of input.budgetLines) {
     originalByCode.set(line.costCodeId, money(originalByCode.get(line.costCodeId) ?? 0).plus(line.originalAmount));
+  }
+  const variationByCode = new Map<string, Prisma.Decimal>();
+  for (const line of input.variationCosts ?? []) {
+    if (!line.costCodeId) {
+      continue;
+    }
+    variationByCode.set(line.costCodeId, money(variationByCode.get(line.costCodeId) ?? 0).plus(line.amount));
   }
 
   const byCode = new Map<
@@ -72,8 +80,9 @@ export function explainCostOverruns(input: {
       continue;
     }
     const original = money(originalByCode.get(costCodeId) ?? 0);
+    const allowed = original.plus(variationByCode.get(costCodeId) ?? 0);
     const finalCost = row.actual.plus(row.committed).plus(row.forecast);
-    const extra = finalCost.minus(original);
+    const extra = finalCost.minus(allowed);
     if (extra.lte(0)) {
       continue;
     }

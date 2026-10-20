@@ -79,6 +79,7 @@ describe('profit formulas', () => {
       originalContractValue: d('100000.00'),
       qualifyingVariationRevenue: d('17000.00'),
       qualifyingVariationProfit: d('7000.00'),
+      qualifyingVariationCost: d('10000.00'),
       originalCostBudget: d('80000.00'),
       currentCostBudget: d('90000.00'),
       actualCost: d('0'),
@@ -90,6 +91,21 @@ describe('profit formulas', () => {
     expect(vo.currentPlannedProfit.toFixed(2)).toBe('27000.00');
     expect(vo.forecastProfit.toFixed(2)).toBe('27000.00');
     expect(vo.profitAtRisk.toFixed(2)).toBe('0.00');
+  });
+
+  it('does not treat approved variation cost as profit at risk', () => {
+    const vo = calculateProfit({
+      originalContractValue: d('100000.00'),
+      qualifyingVariationRevenue: d('17000.00'),
+      qualifyingVariationCost: d('10000.00'),
+      originalCostBudget: d('80000.00'),
+      currentCostBudget: d('80000.00'),
+      actualCost: d('0'),
+      openCommittedCost: d('0'),
+      forecastUncommittedCost: d('90000.00'),
+    });
+    expect(vo.profitAtRisk.toFixed(2)).toBe('0.00');
+    expect(vo.forecastFinalCost.toFixed(2)).toBe('90000.00');
   });
 
   it('returns null margin when expected revenue is zero', () => {
