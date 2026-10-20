@@ -129,7 +129,7 @@ export class PdfService {
     const [meta, rows] = await Promise.all([
       this.meta(companyId, projectId),
       this.prisma.variation.findMany({
-        where: { companyId, projectId },
+        where: { companyId, projectId, status: { notIn: ['REJECTED', 'CANCELLED'] } },
         orderBy: { variationNo: 'asc' },
       }),
     ]);

@@ -1,5 +1,9 @@
 import { Prisma } from '@prisma/client';
-import { calculateProfit, variationQualifiesForRevenue } from './profit-formulas';
+import {
+  calculateProfit,
+  uncommittedForecastWithVariationCosts,
+  variationQualifiesForRevenue,
+} from './profit-formulas';
 
 const d = (value: string) => new Prisma.Decimal(value);
 
@@ -106,6 +110,54 @@ describe('profit formulas', () => {
     });
     expect(vo.profitAtRisk.toFixed(2)).toBe('0.00');
     expect(vo.forecastFinalCost.toFixed(2)).toBe('90000.00');
+  });
+
+  it('puts Jones-style approved VO cost into forecast and keeps extra profit, not at-risk', () => {
+    const remaining = uncommittedForecastWithVariationCosts({
+      forecastFromPostings: d('75000.00'),
+      qualifyingVariationCost: d('10000.00'),
+      postedVariationForecast: d('0'),
+    });
+    expect(remaining.toFixed(2)).toBe('85000.00');
+    const vo = calculateProfit({
+      originalContractValue: d('100000.00'),
+      qualifyingVariationRevenue: d('17000.00'),
+      qualifyingVariationProfit: d('7000.00'),
+      qualifyingVariationCost: d('10000.00'),
+      originalCostBudget: d('75000.00'),
+      currentCostBudget: d('75000.00'),
+      actualCost: d('0'),
+      openCommittedCost: d('0'),
+      forecastUncommittedCost: remaining,
+    });
+    expect(vo.expectedRevenue.toFixed(2)).toBe('117000.00');
+    expect(vo.originalExpectedProfit.toFixed(2)).toBe('25000.00');
+    expect(vo.currentPlannedProfit.toFixed(2)).toBe('32000.00');
+    expect(vo.forecastFinalCost.toFixed(2)).toBe('85000.00');
+    expect(vo.forecastProfit.toFixed(2)).toBe('32000.00');
+    expect(vo.profitAtRisk.toFixed(2)).toBe('0.00');
+  });
+
+  it('does not double-count variation cost already in forecast postings', () => {
+    const remaining = uncommittedForecastWithVariationCosts({
+      forecastFromPostings: d('85000.00'),
+      qualifyingVariationCost: d('10000.00'),
+      postedVariationForecast: d('10000.00'),
+    });
+    expect(remaining.toFixed(2)).toBe('85000.00');
+  });
+
+  it('does not report negative profit at risk when forecast is under the allowed cost', () => {
+    const ahead = calculateProfit({
+      originalContractValue: d('100000.00'),
+      qualifyingVariationRevenue: d('0'),
+      originalCostBudget: d('75000.00'),
+      currentCostBudget: d('75000.00'),
+      actualCost: d('0'),
+      openCommittedCost: d('0'),
+      forecastUncommittedCost: d('70000.00'),
+    });
+    expect(ahead.profitAtRisk.toFixed(2)).toBe('0.00');
   });
 
   it('returns null margin when expected revenue is zero', () => {

@@ -272,7 +272,9 @@ export class ExcelService {
     await this.projects.get(companyId, projectId);
     const [costs, variations, claims, commitments, snapshot] = await Promise.all([
       this.prisma.actualCost.findMany({ where: { companyId, projectId } }),
-      this.prisma.variation.findMany({ where: { companyId, projectId } }),
+      this.prisma.variation.findMany({
+        where: { companyId, projectId, status: { notIn: ['REJECTED', 'CANCELLED'] } },
+      }),
       this.prisma.progressClaim.findMany({ where: { companyId, projectId } }),
       this.prisma.commitment.findMany({ where: { companyId, projectId } }),
       this.profit.compute(companyId, projectId),

@@ -15,7 +15,11 @@ import {
 } from '@prisma/client';
 import { money, sum, zero } from '../common/money';
 import { PrismaService } from '../prisma/prisma.service';
-import { calculateProfit, variationQualifiesForRevenue } from './profit-formulas';
+import {
+  calculateProfit,
+  uncommittedForecastWithVariationCosts,
+  variationQualifiesForRevenue,
+} from './profit-formulas';
 import { explainCostOverruns } from './profit-explanations';
 
 @Injectable()
@@ -142,8 +146,12 @@ export class ProfitEngineService {
           },
         }),
         this.prisma.variation.findMany({
-          where: { projectId, companyId },
-          select: { status: true, sellingPrice: true, contractorCost: true, costCodeId: true },
+          where: {
+            projectId,
+            companyId,
+            status: { notIn: ['REJECTED', 'CANCELLED'] },
+          },
+          select: { id: true, status: true, sellingPrice: true, contractorCost: true, costCodeId: true },
         }),
         this.prisma.projectBudget.findUnique({
           where: { projectId },
@@ -194,11 +202,25 @@ export class ProfitEngineService {
         .filter((item) => item.postingType === FinancialPostingType.COMMITMENT)
         .map((item) => item.amount),
     );
-    const forecastUncommittedCost = sum(
+    const qualifyingVoIds = new Set(qualifyingVos.map((item) => item.id));
+    const forecastFromPostings = sum(
       postings
         .filter((item) => item.postingType === FinancialPostingType.FORECAST)
         .map((item) => item.amount),
     );
+    const postedVariationForecast = sum(
+      postings
+        .filter(
+          (item) =>
+            item.postingType === FinancialPostingType.FORECAST && qualifyingVoIds.has(item.sourceId),
+        )
+        .map((item) => item.amount),
+    );
+    const forecastUncommittedCost = uncommittedForecastWithVariationCosts({
+      forecastFromPostings,
+      qualifyingVariationCost,
+      postedVariationForecast,
+    });
 
     const profit = calculateProfit({
       originalContractValue,

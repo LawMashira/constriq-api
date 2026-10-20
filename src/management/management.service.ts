@@ -195,7 +195,9 @@ export class ManagementService {
     const snapshot = await this.profit.recalculate(companyId, projectId);
     const [costs, variations, claims, leakages] = await Promise.all([
       this.prisma.actualCost.findMany({ where: { companyId, projectId } }),
-      this.prisma.variation.findMany({ where: { companyId, projectId } }),
+      this.prisma.variation.findMany({
+        where: { companyId, projectId, status: { notIn: ['REJECTED', 'CANCELLED'] } },
+      }),
       this.prisma.progressClaim.findMany({ where: { companyId, projectId } }),
       this.prisma.leakageFinding.findMany({ where: { companyId, projectId, status: 'OPEN' } }),
     ]);

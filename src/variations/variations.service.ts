@@ -49,7 +49,11 @@ export class VariationsService {
   async list(companyId: string, projectId: string) {
     await this.projects.get(companyId, projectId);
     return this.prisma.variation.findMany({
-      where: { projectId, companyId },
+      where: {
+        projectId,
+        companyId,
+        status: { notIn: [VariationStatus.REJECTED, VariationStatus.CANCELLED] },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -121,18 +125,24 @@ export class VariationsService {
       throw new BadRequestException('Create a contract before changing variation status');
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.variation.update({
-        where: { id: variation.id },
-        data: {
-          status: next,
-          submittedAt: next === VariationStatus.SUBMITTED ? new Date() : variation.submittedAt,
-          approvedAt: next === VariationStatus.APPROVED ? new Date() : variation.approvedAt,
-          executedAt: next === VariationStatus.EXECUTED ? new Date() : variation.executedAt,
-        },
-      });
+    const discarded = next === VariationStatus.REJECTED || next === VariationStatus.CANCELLED;
 
-      if (variationQualifiesForRevenue(updated.status, rule)) {
+    await this.prisma.$transaction(async (tx) => {
+      const updated = discarded
+        ? variation
+        : await tx.variation.update({
+            where: { id: variation.id },
+            data: {
+              status: next,
+              submittedAt: next === VariationStatus.SUBMITTED ? new Date() : variation.submittedAt,
+              approvedAt: next === VariationStatus.APPROVED ? new Date() : variation.approvedAt,
+              executedAt: next === VariationStatus.EXECUTED ? new Date() : variation.executedAt,
+            },
+          });
+
+      if (discarded) {
+        await this.stripVariationMoney(tx, variation.id);
+      } else if (variationQualifiesForRevenue(updated.status, rule)) {
         await this.postRevenue(tx, {
           companyId,
           projectId,
@@ -146,19 +156,7 @@ export class VariationsService {
           variation: updated,
         });
       } else {
-        await tx.revenuePosting.updateMany({
-          where: { variationId: variation.id, isReversed: false },
-          data: { isReversed: true },
-        });
-        await tx.financialPosting.updateMany({
-          where: {
-            sourceType: FinancialSourceType.FORECAST,
-            sourceId: variation.id,
-            postingType: FinancialPostingType.FORECAST,
-            isReversed: false,
-          },
-          data: { isReversed: true, reversedAt: new Date() },
-        });
+        await this.stripVariationMoney(tx, variation.id);
       }
 
       const revenue = await this.sumQualifying(tx, projectId);
@@ -175,7 +173,9 @@ export class VariationsService {
             contractId: contract.id,
             previousValue: previousApproved,
             newValue: nextApproved,
-            reason: `VO ${variation.variationNo} ${variation.status} → ${next}`,
+            reason: discarded
+              ? `VO ${variation.variationNo} ${variation.status} → ${next} (removed)`
+              : `VO ${variation.variationNo} ${variation.status} → ${next}`,
             createdById: userId,
           },
         });
@@ -185,11 +185,20 @@ export class VariationsService {
         {
           companyId,
           userId,
-          action: next === VariationStatus.APPROVED ? AuditAction.APPROVE : AuditAction.UPDATE,
+          action:
+            next === VariationStatus.APPROVED
+              ? AuditAction.APPROVE
+              : next === VariationStatus.REJECTED
+                ? AuditAction.REJECT
+                : discarded
+                  ? AuditAction.DELETE
+                  : AuditAction.UPDATE,
           module: 'VARIATIONS',
           entityType: EntityType.VARIATION,
           entityId: variation.id,
-          description: `VO ${variation.variationNo} ${variation.status} → ${next}`,
+          description: discarded
+            ? `VO ${variation.variationNo} ${next === VariationStatus.REJECTED ? 'rejected' : 'withdrawn'} and removed`
+            : `VO ${variation.variationNo} ${variation.status} → ${next}`,
           reason: variation.reason ?? undefined,
           oldData: {
             status: variation.status,
@@ -198,7 +207,8 @@ export class VariationsService {
           },
           newData: {
             projectId,
-            status: next,
+            status: discarded ? next : updated.status,
+            removed: discarded,
             originalContractValue: contract.originalValue.toFixed(2),
             currentApprovedContractValue: nextApproved.toFixed(2),
             sellingPrice: variation.sellingPrice.toFixed(2),
@@ -207,10 +217,37 @@ export class VariationsService {
         },
         tx,
       );
+
+      if (discarded) {
+        await tx.variation.delete({ where: { id: variation.id } });
+      }
     });
 
     await this.profit.recalculate(companyId, projectId);
+    if (discarded) {
+      return { id: variationId, variationNo: variation.variationNo, status: next, removed: true };
+    }
     return this.prisma.variation.findUniqueOrThrow({ where: { id: variationId } });
+  }
+
+  private async stripVariationMoney(tx: Prisma.TransactionClient, variationId: string) {
+    await tx.revenuePosting.deleteMany({ where: { variationId } });
+    const posts = await tx.financialPosting.findMany({
+      where: { sourceId: variationId },
+      select: { id: true },
+    });
+    const postingIds = posts.map((item) => item.id);
+    if (postingIds.length) {
+      await tx.financialPosting.updateMany({
+        where: { reversalOfId: { in: postingIds } },
+        data: { reversalOfId: null },
+      });
+      await tx.financialPosting.deleteMany({ where: { id: { in: postingIds } } });
+    }
+    await tx.scenarioAdjustment.updateMany({
+      where: { variationId },
+      data: { variationId: null },
+    });
   }
 
   private async postCost(

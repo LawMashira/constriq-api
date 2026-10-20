@@ -50,7 +50,8 @@ export function calculateProfit(input: ProfitInputs): ProfitResult {
   const forecastFinalCost = actualCost.plus(openCommittedCost).plus(forecastUncommittedCost);
   const forecastProfit = subtract(expectedRevenue, forecastFinalCost);
   const allowedFinalCost = originalBudget.plus(variationCost);
-  const profitAtRisk = subtract(forecastFinalCost, allowedFinalCost);
+  const rawAtRisk = subtract(forecastFinalCost, allowedFinalCost);
+  const profitAtRisk = rawAtRisk.gt(0) ? rawAtRisk : zero();
 
   return {
     originalContractValue,
@@ -89,4 +90,15 @@ export function variationQualifiesForRevenue(
     return status === 'APPROVED' || status === 'EXECUTED';
   }
   return status === 'EXECUTED';
+}
+
+/** Approved VO cost belongs in remaining forecast unless a posting already carries it. */
+export function uncommittedForecastWithVariationCosts(input: {
+  forecastFromPostings: Prisma.Decimal;
+  qualifyingVariationCost: Prisma.Decimal;
+  postedVariationForecast?: Prisma.Decimal;
+}): Prisma.Decimal {
+  const posted = money(input.postedVariationForecast ?? zero());
+  const missing = money(input.qualifyingVariationCost).minus(posted);
+  return money(input.forecastFromPostings).plus(missing.gt(0) ? missing : zero());
 }
