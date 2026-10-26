@@ -86,6 +86,34 @@ describe('flexible column mapping', () => {
     expect(result.errors.some((error) => error.field === 'quantity')).toBe(true);
   });
 
+  it('imports a quotation-style BOQ with title rows and dollar rates', () => {
+    const sheet = parseCsv(`Mhizha Construction – BOQ & Estimation Tool
+
+Document Type	Quotation
+Customer Name	Gweru City Council
+#	Scope Item	UoM	Quantity	Unit Rate (USD)	Subtotal (USD)
+1	Cement 32.5R (50kg)	Bag	400.00	$11.50	$4,600.00
+2	River Sand	m³	60.00	$28.00	$1,680.00
+9					-
+				Subtotal (cost)	$20,716.00
+`);
+    expect(sheet.headers[0]).toBe('#');
+    expect(sheet.headers[1]).toBe('Scope Item');
+    const suggested = suggestColumnMap(sheet.headers, ImportType.BOQ);
+    expect(suggested.itemCode).toBe('#');
+    expect(suggested.description).toBe('Scope Item');
+    expect(suggested.unit).toBe('UoM');
+    expect(suggested.quantity).toBe('Quantity');
+    expect(suggested.rate).toBe('Unit Rate (USD)');
+    expect(suggested.amount).toBe('Subtotal (USD)');
+    const mapped = applyColumnMap(sheet, ImportType.BOQ, suggested);
+    const result = validateMappedRows(ImportType.BOQ, mapped);
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toHaveLength(2);
+    expect(result.valid[0].values.description).toBe('Cement 32.5R (50kg)');
+    expect(result.valid[0].values.rate).toBe('$11.50');
+  });
+
   it('accepts a valid BOQ mapping', () => {
     const mapped = applyColumnMap(sheet, ImportType.BOQ, {
       itemCode: 0,

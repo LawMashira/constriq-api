@@ -627,7 +627,12 @@ function parseDate(value: string): Date {
 }
 
 export function cleanNumber(value: string): string {
-  return value.replace(/,/g, '').trim();
+  return value
+    .replace(/,/g, '')
+    .replace(/\s/g, '')
+    .replace(/^(us\$|usd|zar|r|\$|€|£)+/i, '')
+    .replace(/(us\$|usd|zar)$/i, '')
+    .trim();
 }
 
 function emptyToUndefined(value?: string) {

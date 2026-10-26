@@ -1,4 +1,4 @@
-import { parseCsv, ParsedSheet, stringifyCell } from './mapping';
+import { parseCsv, ParsedSheet, sheetFromMatrix, stringifyCell } from './mapping';
 
 export async function parseWorkbook(buffer: Buffer, fileName: string, sheetName?: string): Promise<ParsedSheet> {
   if (fileName.toLowerCase().endsWith('.csv')) {
@@ -22,18 +22,7 @@ export async function parseWorkbook(buffer: Buffer, fileName: string, sheetName?
     }
     matrix.push(cells);
   });
-  const headerRow = matrix[0] ?? [];
-  const headers = headerRow.map((header, index) => header || `Column${index + 1}`);
-  const width = headers.length;
-  const rows = matrix.slice(1).map((row) => {
-    const padded = [...row];
-    while (padded.length < width) {
-      padded.push('');
-    }
-    return padded.slice(0, width);
-  });
-  return { sheetName: worksheet.name, headers, rows };
-}
+  return sheetFromMatrix(matrix, worksheet.name);
 
 function excelCell(value: unknown): string {
   if (value && typeof value === 'object' && 'text' in (value as { text?: string })) {

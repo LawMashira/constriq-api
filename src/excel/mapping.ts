@@ -1,4 +1,4 @@
-import { ColumnMap, fieldsFor, ImportField } from './import-fields';
+import { ColumnMap, fieldsFor, ImportField, normalizeHeader } from './import-fields';
 import { ImportType } from '@prisma/client';
 
 export type ParsedSheet = {
@@ -138,7 +138,7 @@ export function validateMappedRows(
   const valid: MappedRow[] = [];
   for (const row of rows) {
     const blank = fields.every((field) => !row.values[field.key]?.trim()) && !Object.keys(row.extras).length;
-    if (blank) {
+    if (blank || (type === ImportType.BOQ && isPlaceholderBoqRow(row))) {
       continue;
     }
     let failed = false;
@@ -162,7 +162,7 @@ function validateField(field: ImportField, raw: string): string | null {
     return field.required ? `${field.label} is required` : null;
   }
   if (field.type === 'money' || field.type === 'quantity') {
-    if (!/^-?\d+(\.\d+)?$/.test(value.replace(/,/g, ''))) {
+    if (!/^-?\d+(\.\d+)?$/.test(stripMoneyNoise(value))) {
       return `${field.label} must be numeric`;
     }
   }
@@ -213,6 +213,84 @@ function coerceEnum(value: string, allowed: string[]): string | null {
   return null;
 }
 
+const TABLE_HEADER_TOKENS = [
+  'quantity',
+  'qty',
+  'unit',
+  'uom',
+  'rate',
+  'unitrate',
+  'amount',
+  'subtotal',
+  'description',
+  'scopeitem',
+  'itemdescription',
+  'itemno',
+  'itemcode',
+  'costcode',
+];
+
+export function findHeaderRowIndex(matrix: string[][]): number {
+  let bestIndex = 0;
+  let bestScore = 0;
+  const limit = Math.min(matrix.length, 60);
+  for (let index = 0; index < limit; index += 1) {
+    const score = (matrix[index] ?? []).reduce((total, cell) => {
+      const trimmed = cell.trim();
+      if (trimmed === '#') {
+        return total + 1;
+      }
+      const normalized = normalizeHeader(trimmed);
+      if (!normalized) {
+        return total;
+      }
+      const hit = TABLE_HEADER_TOKENS.some(
+        (token) => normalized === token || (token.length >= 4 && normalized.includes(token)),
+      );
+      return hit ? total + 1 : total;
+    }, 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+  return bestScore >= 3 ? bestIndex : 0;
+}
+
+export function sheetFromMatrix(matrix: string[][], sheetName = 'Sheet1'): ParsedSheet {
+  const headerIndex = findHeaderRowIndex(matrix);
+  const headerRow = matrix[headerIndex] ?? [];
+  const headers = headerRow.map((header, index) => header || `Column${index + 1}`);
+  const width = Math.max(headers.length, 1);
+  const rows = matrix.slice(headerIndex + 1).map((row) => {
+    const padded = [...row];
+    while (padded.length < width) {
+      padded.push('');
+    }
+    return padded.slice(0, width);
+  });
+  return { sheetName, headers, rows };
+}
+
+export function stripMoneyNoise(value: string): string {
+  return value
+    .replace(/,/g, '')
+    .replace(/\s/g, '')
+    .replace(/^(us\$|usd|zar|r|\$|€|£)+/i, '')
+    .replace(/(us\$|usd|zar)$/i, '');
+}
+
+function isPlaceholderBoqRow(row: MappedRow): boolean {
+  const description = (row.values.description ?? '').trim();
+  const quantity = stripMoneyNoise(row.values.quantity ?? '');
+  const rate = stripMoneyNoise(row.values.rate ?? '');
+  const emptyish = (value: string) => !value || value === '-' || value === '—' || value === '.';
+  if (/^subtotal/i.test(description) || /^subtotal/i.test(rate) || /^subtotal/i.test(quantity)) {
+    return true;
+  }
+  return emptyish(description) && !/^-?\d+(\.\d+)?$/.test(quantity);
+}
+
 export function stringifyCell(value: unknown): string {
   if (value == null) {
     return '';
@@ -228,16 +306,11 @@ export function stringifyCell(value: unknown): string {
 
 export function parseCsv(text: string): ParsedSheet {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((line) => line.length);
-  const table = lines.map(splitCsvLine);
-  const headers = (table[0] ?? []).map((header, index) => header || `Column${index + 1}`);
-  const rows = table.slice(1).map((row) => {
-    const padded = [...row];
-    while (padded.length < headers.length) {
-      padded.push('');
-    }
-    return padded.slice(0, headers.length);
-  });
-  return { sheetName: 'Sheet1', headers, rows };
+  const delimiter = lines.some((line) => (line.match(/\t/g) ?? []).length > (line.match(/,/g) ?? []).length)
+    ? '\t'
+    : ',';
+  const table = lines.map((line) => (delimiter === '\t' ? line.split('\t') : splitCsvLine(line)));
+  return sheetFromMatrix(table);
 }
 
 function splitCsvLine(line: string): string[] {

@@ -18,15 +18,21 @@ const VARIATION_STATUSES = Object.values(VariationStatus);
 
 export const IMPORT_FIELDS: Record<ImportType, ImportField[]> = {
   BOQ: [
-    field('itemCode', 'Item code', true, 'string', ['item no', 'item number', 'boq code', 'ref']),
-    field('description', 'Description', true, 'string', ['desc', 'item description', 'particulars']),
+    field('itemCode', 'Item code', true, 'string', ['item no', 'item number', 'boq code', 'ref', 'line no', 'line']),
+    field('description', 'Description', true, 'string', [
+      'desc',
+      'item description',
+      'particulars',
+      'scope item',
+      'scope',
+    ]),
     field('section', 'Section', false, 'string', ['heading', 'bill', 'trade']),
     field('category', 'Cost category', false, 'enum', ['cost category'], COST_CATEGORIES),
     field('costCode', 'Cost code', false, 'string', ['cost code', 'wbs', 'account']),
     field('quantity', 'Quantity', true, 'quantity', ['qty', 'quant']),
     field('unit', 'Unit', false, 'string', ['uom', 'unit of measure', 'um']),
     field('rate', 'Rate', true, 'quantity', ['unit rate', 'price', 'rate only', 'selling rate']),
-    field('amount', 'Amount', false, 'money', ['total', 'extended', 'selling amount']),
+    field('amount', 'Amount', false, 'money', ['total', 'extended', 'selling amount', 'subtotal']),
     field('costRate', 'Cost rate', false, 'quantity', ['costrate', 'contractor rate', 'our rate', 'cost unit rate']),
   ],
   BUDGET: [
@@ -129,6 +135,15 @@ function headerMatchScore(header: string, field: ImportField, type: ImportType):
       return 100;
     }
     if (field.key === 'itemCode' && normalized === 'costcode') {
+      return 100;
+    }
+    if (field.key === 'itemCode' && (header.trim() === '#' || normalized === 'no')) {
+      return 100;
+    }
+    if (field.key === 'itemCode' && (normalized === 'scopeitem' || normalized === 'scope')) {
+      return 0;
+    }
+    if (field.key === 'description' && (normalized === 'scopeitem' || normalized === 'scope')) {
       return 100;
     }
   }
