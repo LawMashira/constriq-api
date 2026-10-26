@@ -13,6 +13,7 @@ import {
   activateCompanyMembership,
   bootstrapCompanyIdentity,
   companyRegisteredAudit,
+  ensureGlobalPermissions,
 } from '../identity/tenant-bootstrap';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -58,42 +59,51 @@ export class AuthService {
       };
     }
 
-    const user = await this.prisma.$transaction(async (tx) => {
-      const company = await tx.company.create({
-        data: {
-          legalName: dto.companyLegalName,
-          tradingName: dto.tradingName,
-          country: dto.country ?? 'ZA',
-          currency: dto.currency ?? 'ZAR',
-          settings: { create: {} },
-        },
-      });
+    await ensureGlobalPermissions(this.prisma);
 
-      const created = await tx.user.create({
-        data: {
-          companyId: company.id,
-          name: dto.name,
-          email,
-          passwordHash,
-          status: UserStatus.INVITED,
-        },
-      });
+    const user = await this.prisma.$transaction(
+      async (tx) => {
+        const company = await tx.company.create({
+          data: {
+            legalName: dto.companyLegalName,
+            tradingName: dto.tradingName,
+            country: dto.country ?? 'ZA',
+            currency: dto.currency ?? 'ZAR',
+            settings: { create: {} },
+          },
+        });
 
-      await bootstrapCompanyIdentity(tx, {
-        companyId: company.id,
-        userId: created.id,
-        ownerUserStatus: UserStatus.INVITED,
-      });
+        const created = await tx.user.create({
+          data: {
+            companyId: company.id,
+            name: dto.name,
+            email,
+            passwordHash,
+            status: UserStatus.INVITED,
+          },
+        });
 
-      await tx.auditLog.create({
-        data: {
-          companyId: company.id,
-          ...companyRegisteredAudit({ companyId: company.id, userId: created.id }),
-        },
-      });
+        await bootstrapCompanyIdentity(
+          tx,
+          {
+            companyId: company.id,
+            userId: created.id,
+            ownerUserStatus: UserStatus.INVITED,
+          },
+          { skipGlobalPermissions: true },
+        );
 
-      return created;
-    });
+        await tx.auditLog.create({
+          data: {
+            companyId: company.id,
+            ...companyRegisteredAudit({ companyId: company.id, userId: created.id }),
+          },
+        });
+
+        return created;
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
 
     await this.sendOtp(email, user.id, OtpPurpose.EMAIL_VERIFICATION);
 

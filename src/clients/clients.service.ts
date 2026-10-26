@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { AuditAction, EntityType } from '@prisma/client';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { AuditAction, EntityType, Prisma } from '@prisma/client';
 import { AuditService } from '../common/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -20,9 +20,17 @@ export class ClientsService {
   }
 
   async create(companyId: string, userId: string, dto: CreateClientDto) {
-    const client = await this.prisma.client.create({
-      data: { companyId, ...dto },
-    });
+    let client;
+    try {
+      client = await this.prisma.client.create({
+        data: { companyId, ...dto },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('A client with this name already exists');
+      }
+      throw error;
+    }
     await this.audit.record({
       companyId,
       userId,

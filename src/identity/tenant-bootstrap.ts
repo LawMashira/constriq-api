@@ -84,35 +84,42 @@ export async function bootstrapCompanyIdentity(
     userId: string;
     ownerUserStatus: UserStatus;
   },
+  options?: { skipGlobalPermissions?: boolean },
 ) {
-  await ensureGlobalPermissions(db);
+  if (!options?.skipGlobalPermissions) {
+    await ensureGlobalPermissions(db);
+  }
 
   const permissions = await db.permission.findMany({
     where: { code: { in: PERMISSION_CATALOG.map((item) => item.code) } },
   });
   const permissionByCode = new Map(permissions.map((item) => [item.code, item.id]));
 
-  const roleIds = new Map<SystemRole, string>();
+  await db.roleDefinition.createMany({
+    data: SYSTEM_ROLE_PRESETS.map((preset) => ({
+      companyId: input.companyId,
+      name: preset.name,
+      systemRole: preset.systemRole,
+      isSystem: true,
+      isReadOnly: preset.isReadOnly,
+    })),
+    skipDuplicates: true,
+  });
 
+  const roles = await db.roleDefinition.findMany({
+    where: {
+      companyId: input.companyId,
+      name: { in: SYSTEM_ROLE_PRESETS.map((preset) => preset.name) },
+    },
+    select: { id: true, name: true },
+  });
+  const roleByName = new Map(roles.map((role) => [role.name, role.id]));
+  const roleIds = new Map<SystemRole, string>();
   for (const preset of SYSTEM_ROLE_PRESETS) {
-    const role = await db.roleDefinition.upsert({
-      where: {
-        companyId_name: { companyId: input.companyId, name: preset.name },
-      },
-      create: {
-        companyId: input.companyId,
-        name: preset.name,
-        systemRole: preset.systemRole,
-        isSystem: true,
-        isReadOnly: preset.isReadOnly,
-      },
-      update: {
-        systemRole: preset.systemRole,
-        isSystem: true,
-        isReadOnly: preset.isReadOnly,
-      },
-    });
-    roleIds.set(preset.systemRole, role.id);
+    const roleId = roleByName.get(preset.name);
+    if (roleId) {
+      roleIds.set(preset.systemRole, roleId);
+    }
   }
 
   await grantPresetRolePermissions(db, input.companyId, permissionByCode);
