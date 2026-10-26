@@ -23,6 +23,7 @@ export async function parseWorkbook(buffer: Buffer, fileName: string, sheetName?
     matrix.push(cells);
   });
   return sheetFromMatrix(matrix, worksheet.name);
+}
 
 function excelCell(value: unknown): string {
   if (value && typeof value === 'object' && 'text' in (value as { text?: string })) {
