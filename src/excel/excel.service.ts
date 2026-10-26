@@ -210,36 +210,39 @@ export class ExcelService {
       throw new BadRequestException('File failed validation on commit');
     }
     const preview = record.preview as { options?: { createMissingCostCodes?: boolean; createMissingSuppliers?: boolean } } | null;
-    const result = await this.prisma.$transaction(async (tx) => {
-      const applied = await applyImportRows(tx, record.type, accepted, {
-        companyId,
-        projectId: record.projectId!,
-        userId,
-        importId: id,
-        createMissingCostCodes: preview?.options?.createMissingCostCodes,
-        createMissingSuppliers: preview?.options?.createMissingSuppliers,
-      });
-      await tx.auditLog.create({
-        data: {
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const applied = await applyImportRows(tx, record.type, accepted, {
           companyId,
+          projectId: record.projectId!,
           userId,
-          action: AuditAction.IMPORT,
-          module: 'EXCEL',
-          entityType: EntityType.IMPORT,
-          entityId: id,
-          description: `Imported ${applied.created} ${record.type} rows`,
-          source: 'USER',
-        },
-      });
-      return tx.dataImport.update({
-        where: { id },
-        data: {
-          status: ImportStatus.IMPORTED,
-          completedAt: new Date(),
-          errorCount: 0,
-        },
-      });
-    });
+          importId: id,
+          createMissingCostCodes: preview?.options?.createMissingCostCodes,
+          createMissingSuppliers: preview?.options?.createMissingSuppliers,
+        });
+        await tx.auditLog.create({
+          data: {
+            companyId,
+            userId,
+            action: AuditAction.IMPORT,
+            module: 'EXCEL',
+            entityType: EntityType.IMPORT,
+            entityId: id,
+            description: `Imported ${applied.created} ${record.type} rows`,
+            source: 'USER',
+          },
+        });
+        return tx.dataImport.update({
+          where: { id },
+          data: {
+            status: ImportStatus.IMPORTED,
+            completedAt: new Date(),
+            errorCount: 0,
+          },
+        });
+      },
+      { maxWait: 15_000, timeout: 60_000 },
+    );
     await this.profit.recalculate(companyId, record.projectId);
     return result;
   }

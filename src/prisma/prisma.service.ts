@@ -9,6 +9,10 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
   constructor(pool: Pool) {
     super({
       adapter: new PrismaPg(pool, { disposeExternalPool: true }),
+      transactionOptions: {
+        maxWait: 10_000,
+        timeout: 20_000,
+      },
     });
   }
 

@@ -2,7 +2,7 @@
 
 Construction profit intelligence and project financial control.
 
-- **Manual (setup, product flow, deploy, ops):** [MANUAL.md](./MANUAL.md)
+- **User manual** (for company staff, not developers): [MANUAL.md](./MANUAL.md)
 - **Frontend API contract:** [FRONTEND_INTEGRATION.md](./FRONTEND_INTEGRATION.md)
 - **Swagger:** `/docs` when the server is running
 
