@@ -39,6 +39,32 @@ function createTx() {
       }),
     },
     roleDefinition: {
+      createMany: jest.fn(
+        async ({
+          data,
+        }: {
+          data: Array<{
+            companyId: string;
+            name: string;
+            systemRole: SystemRole;
+            isSystem: boolean;
+            isReadOnly: boolean;
+          }>;
+        }) => {
+          for (const create of data) {
+            const key = `${create.companyId}:${create.name}`;
+            if (!roles.has(key)) {
+              roles.set(key, {
+                id: `role-${create.systemRole}`,
+                name: create.name,
+                systemRole: create.systemRole,
+                companyId: create.companyId,
+              });
+            }
+          }
+          return { count: data.length };
+        },
+      ),
       upsert: jest.fn(async ({ where, create }) => {
         const key = `${where.companyId_name.companyId}:${where.companyId_name.name}`;
         const existing = roles.get(key);

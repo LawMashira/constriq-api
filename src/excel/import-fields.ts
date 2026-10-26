@@ -115,16 +115,27 @@ export function suggestColumnMap(headers: string[], type: ImportType): ColumnMap
 function headerMatchScore(header: string, field: ImportField, type: ImportType): number {
   const normalized = normalizeHeader(header);
   const candidates = [field.key, field.label, ...field.aliases].map(normalizeHeader);
-  if (type === ImportType.BOQ && field.key === 'rate' && normalized.includes('cost')) {
-    return 0;
+  if (type === ImportType.BOQ) {
+    if (field.key === 'rate' && normalized.includes('cost')) {
+      return 0;
+    }
+    if (field.key === 'costCode') {
+      return 0;
+    }
+    if (field.key === 'category' && normalized === 'category') {
+      return 0;
+    }
+    if (field.key === 'section' && normalized === 'category') {
+      return 100;
+    }
+    if (field.key === 'itemCode' && normalized === 'costcode') {
+      return 100;
+    }
   }
   if (candidates.includes(normalized)) {
     return 100;
   }
   if (field.type === 'enum') {
-    return 0;
-  }
-  if (type === ImportType.BOQ && field.key === 'costCode') {
     return 0;
   }
   for (const candidate of candidates) {
