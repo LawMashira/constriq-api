@@ -10,6 +10,7 @@ import {
   VariationStatus,
 } from '@prisma/client';
 import { money, rate } from '../common/money';
+import { BOQ_REMAINING_FORECAST_REASON } from '../common/remaining-forecast';
 import { MappedRow } from './mapping';
 
 export type ApplyContext = {
@@ -186,7 +187,7 @@ export async function seedCommercialFromBoq(
           projectId: context.projectId,
           costCodeId,
           amount,
-          reason: 'Remaining cost assumed equal to the imported cost rates until a forecast is posted',
+          reason: BOQ_REMAINING_FORECAST_REASON,
           period: new Date(),
           forecastDate: new Date(),
           status: ForecastStatus.ACTIVE,

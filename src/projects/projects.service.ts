@@ -12,6 +12,11 @@ import {
 } from '@prisma/client';
 import { AuditService } from '../common/audit.service';
 import { money, percentRatio, zero } from '../common/money';
+import {
+  AUTO_REMAINING_FORECAST_REASONS,
+  isLumpCostCode,
+  ORIGINAL_FORECAST_REASON,
+} from '../common/remaining-forecast';
 import { SequenceService } from '../common/sequence.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProfitEngineService } from '../profit-engine/profit-engine.service';
@@ -19,7 +24,6 @@ import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { EXPECTED_COST_BUCKETS, resolveExpectedCostLines } from './no-boq-baseline';
 
-const ORIGINAL_FORECAST_REASON = 'Uncommitted remaining cost from the original estimate';
 const BASELINE_COST_CODES = new Set<string>([...EXPECTED_COST_BUCKETS.map((bucket) => bucket.code), 'GEN']);
 
 @Injectable()
@@ -257,6 +261,8 @@ export class ProjectsService {
         });
       }
 
+      await this.dropDuplicateLumpRemaining(tx, id);
+
       await this.audit.record(
         {
           companyId,
@@ -408,6 +414,60 @@ export class ProjectsService {
 
     const wanted = new Map(input.lines.map((line) => [line.code, line]));
     const baselineLines = budget.lines.filter((line) => BASELINE_COST_CODES.has(line.costCode.code));
+    const structuredLines = budget.lines.filter((line) => !BASELINE_COST_CODES.has(line.costCode.code));
+    const lumpPlan =
+      input.lines.length <= 1 && input.lines.every((line) => isLumpCostCode(line.code));
+
+    if (structuredLines.length && lumpPlan) {
+      const structuredSum = structuredLines.reduce((acc, line) => acc.plus(line.originalAmount), zero());
+      let allocated = zero();
+      for (const [index, line] of structuredLines.entries()) {
+        const share = structuredSum.gt(0)
+          ? input.total.times(line.originalAmount).div(structuredSum)
+          : input.total.div(structuredLines.length);
+        const amount =
+          index === structuredLines.length - 1 ? input.total.minus(allocated) : money(share.toFixed(2));
+        allocated = allocated.plus(amount);
+        const lineExtra = money(line.currentAmount).minus(line.originalAmount);
+        await tx.projectBudgetLine.update({
+          where: { id: line.id },
+          data: { originalAmount: amount, currentAmount: amount.plus(lineExtra) },
+        });
+        await this.syncOriginalForecast(tx, {
+          companyId: input.companyId,
+          userId: input.userId,
+          projectId: input.projectId,
+          costCodeId: line.costCodeId,
+          amount,
+        });
+      }
+      for (const line of baselineLines) {
+        const lineExtra = money(line.currentAmount).minus(line.originalAmount);
+        await tx.projectBudgetLine.update({
+          where: { id: line.id },
+          data: { originalAmount: zero(), currentAmount: lineExtra },
+        });
+        await this.syncOriginalForecast(tx, {
+          companyId: input.companyId,
+          userId: input.userId,
+          projectId: input.projectId,
+          costCodeId: line.costCodeId,
+          amount: zero(),
+        });
+      }
+      return;
+    }
+
+    for (const line of structuredLines) {
+      await this.syncOriginalForecast(tx, {
+        companyId: input.companyId,
+        userId: input.userId,
+        projectId: input.projectId,
+        costCodeId: line.costCodeId,
+        amount: zero(),
+      });
+    }
+
     const codesToTouch = new Set([...wanted.keys(), ...baselineLines.map((line) => line.costCode.code)]);
 
     for (const code of codesToTouch) {
@@ -474,27 +534,23 @@ export class ProjectsService {
       amount: Prisma.Decimal;
     },
   ) {
-    const forecast = await tx.costForecast.findFirst({
+    const forecasts = await tx.costForecast.findMany({
       where: {
         projectId: input.projectId,
         costCodeId: input.costCodeId,
-        reason: ORIGINAL_FORECAST_REASON,
+        reason: { in: [...AUTO_REMAINING_FORECAST_REASONS] },
         status: ForecastStatus.ACTIVE,
       },
+      orderBy: { createdAt: 'asc' },
     });
+    const forecast = forecasts[0];
+    for (const extra of forecasts.slice(1)) {
+      await this.reverseForecast(tx, extra);
+    }
 
     if (input.amount.lte(0)) {
-      if (forecast?.financialPostingId) {
-        await tx.financialPosting.update({
-          where: { id: forecast.financialPostingId },
-          data: { isReversed: true, reversedAt: new Date() },
-        });
-      }
       if (forecast) {
-        await tx.costForecast.update({
-          where: { id: forecast.id },
-          data: { amount: zero(), status: ForecastStatus.SUPERSEDED },
-        });
+        await this.reverseForecast(tx, forecast);
       }
       return;
     }
@@ -507,7 +563,7 @@ export class ProjectsService {
       if (forecast.financialPostingId) {
         await tx.financialPosting.update({
           where: { id: forecast.financialPostingId },
-          data: { amount: input.amount },
+          data: { amount: input.amount, isReversed: false, reversedAt: null },
         });
       }
       return;
@@ -541,6 +597,40 @@ export class ProjectsService {
     await tx.costForecast.update({
       where: { id: created.id },
       data: { financialPostingId: posting.id },
+    });
+  }
+
+  private async dropDuplicateLumpRemaining(tx: Prisma.TransactionClient, projectId: string) {
+    const remaining = await tx.costForecast.findMany({
+      where: {
+        projectId,
+        status: ForecastStatus.ACTIVE,
+        reason: { in: [...AUTO_REMAINING_FORECAST_REASONS] },
+      },
+      include: { costCode: { select: { code: true } } },
+    });
+    const hasStructured = remaining.some((row) => !isLumpCostCode(row.costCode.code));
+    if (!hasStructured) {
+      return;
+    }
+    for (const row of remaining.filter((item) => isLumpCostCode(item.costCode.code))) {
+      await this.reverseForecast(tx, row);
+    }
+  }
+
+  private async reverseForecast(
+    tx: Prisma.TransactionClient,
+    forecast: { id: string; financialPostingId: string | null },
+  ) {
+    if (forecast.financialPostingId) {
+      await tx.financialPosting.update({
+        where: { id: forecast.financialPostingId },
+        data: { isReversed: true, reversedAt: new Date() },
+      });
+    }
+    await tx.costForecast.update({
+      where: { id: forecast.id },
+      data: { amount: zero(), status: ForecastStatus.SUPERSEDED },
     });
   }
 

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   FinancialPostingType,
+  ForecastStatus,
   HealthState,
   LeakageSeverity,
   LeakageStatus,
@@ -14,6 +15,7 @@ import {
   VariationRevenueRule,
 } from '@prisma/client';
 import { money, sum, zero } from '../common/money';
+import { AUTO_REMAINING_FORECAST_REASONS, duplicateLumpRemainingPostingIds } from '../common/remaining-forecast';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   calculateProfit,
@@ -132,7 +134,7 @@ export class ProfitEngineService {
   }
 
   async compute(companyId: string, projectId: string) {
-    const [contracts, variationPostings, voRows, budget, postings, costCodes, unallocated, project, certifications, payments, settings] =
+    const [contracts, variationPostings, voRows, budget, postings, costCodes, remainingForecasts, unallocated, project, certifications, payments, settings] =
       await Promise.all([
         this.prisma.contract.findMany({ where: { projectId, companyId } }),
         this.prisma.revenuePosting.findMany({
@@ -161,6 +163,15 @@ export class ProfitEngineService {
           where: { projectId, companyId, isReversed: false },
         }),
         this.prisma.costCode.findMany({ where: { projectId } }),
+        this.prisma.costForecast.findMany({
+          where: {
+            projectId,
+            companyId,
+            status: ForecastStatus.ACTIVE,
+            reason: { in: [...AUTO_REMAINING_FORECAST_REASONS] },
+          },
+          include: { costCode: { select: { code: true } } },
+        }),
         this.prisma.actualCost.aggregate({
           where: { companyId, projectId, isUnallocated: true },
           _sum: { amount: true },
@@ -203,9 +214,13 @@ export class ProfitEngineService {
         .map((item) => item.amount),
     );
     const qualifyingVoIds = new Set(qualifyingVos.map((item) => item.id));
+    const duplicateRemainingIds = duplicateLumpRemainingPostingIds(remainingForecasts);
     const forecastFromPostings = sum(
       postings
-        .filter((item) => item.postingType === FinancialPostingType.FORECAST)
+        .filter(
+          (item) =>
+            item.postingType === FinancialPostingType.FORECAST && !duplicateRemainingIds.has(item.id),
+        )
         .map((item) => item.amount),
     );
     const postedVariationForecast = sum(
