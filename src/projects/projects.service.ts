@@ -17,7 +17,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ProfitEngineService } from '../profit-engine/profit-engine.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
-import { resolveExpectedCostLines } from './no-boq-baseline';
+import { EXPECTED_COST_BUCKETS, resolveExpectedCostLines } from './no-boq-baseline';
+
+const ORIGINAL_FORECAST_REASON = 'Uncommitted remaining cost from the original estimate';
+const BASELINE_COST_CODES = new Set<string>([...EXPECTED_COST_BUCKETS.map((bucket) => bucket.code), 'GEN']);
 
 @Injectable()
 export class ProjectsService {
@@ -174,28 +177,103 @@ export class ProjectsService {
   }
 
   async update(companyId: string, userId: string, id: string, dto: UpdateProjectDto) {
-    await this.get(companyId, id);
-    const project = await this.prisma.project.update({
-      where: { id },
-      data: {
-        ...dto,
-        contractStartDate: dto.contractStartDate ? new Date(dto.contractStartDate) : undefined,
-        plannedCompletionDate: dto.plannedCompletionDate
-          ? new Date(dto.plannedCompletionDate)
-          : undefined,
-      },
+    const existing = await this.prisma.project.findFirst({ where: { id, companyId } });
+    if (!existing) {
+      throw new NotFoundException('Project not found');
+    }
+
+    const { originalContractValue, expectedTotalCost, expectedCosts, ...fields } = dto;
+
+    if (originalContractValue && money(originalContractValue).lt(0)) {
+      throw new BadRequestException('Original contract value cannot be negative');
+    }
+
+    let costPlan: ReturnType<typeof resolveExpectedCostLines> | undefined;
+    if (expectedTotalCost !== undefined || expectedCosts !== undefined) {
+      try {
+        costPlan = resolveExpectedCostLines({ expectedTotalCost, expectedCosts });
+      } catch (error) {
+        throw new BadRequestException(error instanceof Error ? error.message : 'Invalid expected costs');
+      }
+    }
+
+    if (fields.clientId) {
+      const client = await this.prisma.client.findFirst({
+        where: { id: fields.clientId, companyId },
+      });
+      if (!client) {
+        throw new NotFoundException('Client not found');
+      }
+    }
+
+    if (fields.code && fields.code !== existing.code) {
+      const duplicate = await this.prisma.project.findUnique({
+        where: { companyId_code: { companyId, code: fields.code } },
+      });
+      if (duplicate) {
+        throw new ConflictException('Project code already exists');
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.update({
+        where: { id },
+        data: {
+          code: fields.code,
+          name: fields.name,
+          clientId: fields.clientId === undefined ? undefined : fields.clientId || null,
+          projectManagerId:
+            fields.projectManagerId === undefined ? undefined : fields.projectManagerId || null,
+          siteAddress: fields.siteAddress,
+          contractNo: fields.contractNo,
+          projectType: fields.projectType,
+          status: fields.status,
+          notes: fields.notes,
+          usesBoq: fields.usesBoq,
+          contractStartDate: fields.contractStartDate ? new Date(fields.contractStartDate) : undefined,
+          plannedCompletionDate: fields.plannedCompletionDate
+            ? new Date(fields.plannedCompletionDate)
+            : undefined,
+        },
+      });
+
+      if (originalContractValue !== undefined) {
+        await this.applyOriginalContract(tx, {
+          companyId,
+          userId,
+          project,
+          originalValue: money(originalContractValue),
+          contractNo: fields.contractNo ?? project.contractNo ?? undefined,
+        });
+      }
+
+      if (costPlan) {
+        await this.applyOriginalCosts(tx, {
+          companyId,
+          userId,
+          projectId: id,
+          lines: costPlan.lines,
+          total: costPlan.total,
+        });
+      }
+
+      await this.audit.record(
+        {
+          companyId,
+          userId,
+          action: AuditAction.UPDATE,
+          module: 'PROJECTS',
+          entityType: EntityType.PROJECT,
+          entityId: id,
+          description: `Project ${project.code} updated`,
+          newData: dto as object,
+        },
+        tx,
+      );
     });
-    await this.audit.record({
-      companyId,
-      userId,
-      action: AuditAction.UPDATE,
-      module: 'PROJECTS',
-      entityType: EntityType.PROJECT,
-      entityId: id,
-      description: 'Project updated',
-      newData: dto as object,
-    });
-    return project;
+
+    await this.profit.recalculate(companyId, id);
+    return this.get(companyId, id);
   }
 
   async addContact(
@@ -227,6 +305,242 @@ export class ProjectsService {
     return this.prisma.projectUser.findMany({
       where: { projectId },
       include: { user: { select: { id: true, name: true, email: true } }, role: true },
+    });
+  }
+
+  private async applyOriginalContract(
+    tx: Prisma.TransactionClient,
+    input: {
+      companyId: string;
+      userId: string;
+      project: { id: string; name: string; contractNo: string | null; contractStartDate: Date | null };
+      originalValue: Prisma.Decimal;
+      contractNo?: string;
+    },
+  ) {
+    const contract = await tx.contract.findFirst({
+      where: { projectId: input.project.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!contract) {
+      if (input.originalValue.gt(0)) {
+        await this.seedOriginalContract(tx, input);
+      }
+      return;
+    }
+
+    const variationExtra = money(contract.revisedValue).minus(contract.originalValue);
+    await tx.contract.update({
+      where: { id: contract.id },
+      data: {
+        originalValue: input.originalValue,
+        revisedValue: input.originalValue.plus(variationExtra),
+        ...(input.contractNo ? { contractNo: input.contractNo } : {}),
+      },
+    });
+    const baseUpdated = await tx.revenuePosting.updateMany({
+      where: {
+        projectId: input.project.id,
+        contractId: contract.id,
+        postingType: RevenuePostingType.CONTRACT_BASE,
+        isReversed: false,
+      },
+      data: { amount: input.originalValue },
+    });
+    if (baseUpdated.count === 0 && input.originalValue.gt(0)) {
+      await tx.revenuePosting.create({
+        data: {
+          companyId: input.companyId,
+          projectId: input.project.id,
+          contractId: contract.id,
+          postingType: RevenuePostingType.CONTRACT_BASE,
+          amount: input.originalValue,
+          postingDate: contract.startDate ?? new Date(),
+        },
+      });
+    }
+    await tx.contractRevision.create({
+      data: {
+        projectId: input.project.id,
+        contractId: contract.id,
+        previousValue: contract.originalValue,
+        newValue: input.originalValue,
+        reason: 'Original contract baseline corrected',
+        createdById: input.userId,
+      },
+    });
+  }
+
+  private async applyOriginalCosts(
+    tx: Prisma.TransactionClient,
+    input: {
+      companyId: string;
+      userId: string;
+      projectId: string;
+      lines: Array<{ code: string; name: string; category: CostCategory; amount: Prisma.Decimal }>;
+      total: Prisma.Decimal;
+    },
+  ) {
+    const budget = await tx.projectBudget.findUnique({
+      where: { projectId: input.projectId },
+      include: { lines: { include: { costCode: true } } },
+    });
+    if (!budget) {
+      if (input.lines.length) {
+        await this.seedOriginalCosts(tx, {
+          companyId: input.companyId,
+          userId: input.userId,
+          projectId: input.projectId,
+          lines: input.lines,
+        });
+      }
+      return;
+    }
+
+    const extra = money(budget.currentAmount).minus(budget.originalAmount);
+    await tx.projectBudget.update({
+      where: { id: budget.id },
+      data: {
+        originalAmount: input.total,
+        currentAmount: input.total.plus(extra),
+      },
+    });
+
+    const wanted = new Map(input.lines.map((line) => [line.code, line]));
+    const baselineLines = budget.lines.filter((line) => BASELINE_COST_CODES.has(line.costCode.code));
+    const codesToTouch = new Set([...wanted.keys(), ...baselineLines.map((line) => line.costCode.code)]);
+
+    for (const code of codesToTouch) {
+      const plan = wanted.get(code);
+      const amount = plan?.amount ?? zero();
+      let costCode = await tx.costCode.findUnique({
+        where: { projectId_code: { projectId: input.projectId, code } },
+      });
+      if (!costCode && plan) {
+        costCode = await tx.costCode.create({
+          data: {
+            companyId: input.companyId,
+            projectId: input.projectId,
+            code: plan.code,
+            name: plan.name,
+            category: plan.category,
+          },
+        });
+      }
+      if (!costCode) {
+        continue;
+      }
+
+      const existingLine = budget.lines.find((line) => line.costCodeId === costCode.id);
+      const lineExtra = existingLine
+        ? money(existingLine.currentAmount).minus(existingLine.originalAmount)
+        : zero();
+      if (existingLine) {
+        await tx.projectBudgetLine.update({
+          where: { id: existingLine.id },
+          data: {
+            originalAmount: amount,
+            currentAmount: amount.plus(lineExtra),
+          },
+        });
+      } else if (amount.gt(0)) {
+        await tx.projectBudgetLine.create({
+          data: {
+            budgetId: budget.id,
+            costCodeId: costCode.id,
+            originalAmount: amount,
+            currentAmount: amount,
+          },
+        });
+      }
+
+      await this.syncOriginalForecast(tx, {
+        companyId: input.companyId,
+        userId: input.userId,
+        projectId: input.projectId,
+        costCodeId: costCode.id,
+        amount,
+      });
+    }
+  }
+
+  private async syncOriginalForecast(
+    tx: Prisma.TransactionClient,
+    input: {
+      companyId: string;
+      userId: string;
+      projectId: string;
+      costCodeId: string;
+      amount: Prisma.Decimal;
+    },
+  ) {
+    const forecast = await tx.costForecast.findFirst({
+      where: {
+        projectId: input.projectId,
+        costCodeId: input.costCodeId,
+        reason: ORIGINAL_FORECAST_REASON,
+        status: ForecastStatus.ACTIVE,
+      },
+    });
+
+    if (input.amount.lte(0)) {
+      if (forecast?.financialPostingId) {
+        await tx.financialPosting.update({
+          where: { id: forecast.financialPostingId },
+          data: { isReversed: true, reversedAt: new Date() },
+        });
+      }
+      if (forecast) {
+        await tx.costForecast.update({
+          where: { id: forecast.id },
+          data: { amount: zero(), status: ForecastStatus.SUPERSEDED },
+        });
+      }
+      return;
+    }
+
+    if (forecast) {
+      await tx.costForecast.update({
+        where: { id: forecast.id },
+        data: { amount: input.amount },
+      });
+      if (forecast.financialPostingId) {
+        await tx.financialPosting.update({
+          where: { id: forecast.financialPostingId },
+          data: { amount: input.amount },
+        });
+      }
+      return;
+    }
+
+    const created = await tx.costForecast.create({
+      data: {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        costCodeId: input.costCodeId,
+        amount: input.amount,
+        reason: ORIGINAL_FORECAST_REASON,
+        period: new Date(),
+        forecastDate: new Date(),
+        status: ForecastStatus.ACTIVE,
+        createdById: input.userId,
+      },
+    });
+    const posting = await tx.financialPosting.create({
+      data: {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        costCodeId: input.costCodeId,
+        postingType: FinancialPostingType.FORECAST,
+        sourceType: FinancialSourceType.FORECAST,
+        sourceId: created.id,
+        amount: input.amount,
+        postingDate: new Date(),
+      },
+    });
+    await tx.costForecast.update({
+      where: { id: created.id },
+      data: { financialPostingId: posting.id },
     });
   }
 
@@ -329,7 +643,7 @@ export class ProjectsService {
           projectId: input.projectId,
           costCodeId: line.costCodeId,
           amount: line.amount,
-          reason: 'Uncommitted remaining cost from the original estimate',
+          reason: ORIGINAL_FORECAST_REASON,
           period: new Date(),
           forecastDate: new Date(),
           status: ForecastStatus.ACTIVE,
